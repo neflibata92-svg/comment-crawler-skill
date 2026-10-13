@@ -1,0 +1,7 @@
+"""源自历史脚本的评论抽屉选择器；页面变化时需重新验证。"""
+
+OPEN_DRAWER_JS = '\n() => {\n  const btn = document.querySelector(\'div[class*="ShowButton--"]\');\n  if (btn) { btn.scrollIntoView({block: \'center\'}); btn.click(); return true; }\n  return false;\n}\n'
+
+SCROLL_DRAWER_JS = '\n() => {\n  const drawer = document.querySelector(\'[class*="Drawer--"]\');\n  if (!drawer) return 0;\n  Array.from(drawer.querySelectorAll(\'*\'))\n    .filter(e => e.scrollHeight > e.clientHeight + 50)\n    .forEach(e => { e.scrollTop = e.scrollHeight; });\n  return drawer.querySelectorAll(\'div[class*="Comment--"]\').length;\n}\n'
+
+EXTRACT_JS = '\n() => {\n  const drawer = document.querySelector(\'[class*="Drawer--"]\') || document;\n  const text = (el) => (el ? (el.getAttribute(\'title\') || el.innerText || \'\').trim() : \'\');\n  const cards = Array.from(drawer.querySelectorAll(\'div[class*="Comment--"]\'))\n    .filter(c => !String(c.className).includes(\'Comments--\'));  // 排除最外层容器\n  return cards.map(c => ({\n    user:    text(c.querySelector(\'[class*="userName--"]\')),\n    meta:    text(c.querySelector(\'[class*="meta--"]\')),\n    content: text(c.querySelector(\'[class*="content--"]\')),\n    append:  text(c.querySelector(\'[class*="appendComment--"], [class*="append--"]\')),\n    likes:   text(c.querySelector(\'[class*="like--"], [class*="useful--"]\')),\n    imgs:    c.querySelectorAll(\'[class*="photo--"] img, [class*="album--"] img\').length,\n    full:    c.innerText\n  })).filter(r => r.content || r.user);\n}\n'
