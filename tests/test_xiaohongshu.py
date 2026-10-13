@@ -9,6 +9,7 @@ from comment_crawler.collectors.xiaohongshu import (
 )
 from comment_crawler.core.utils import CollectionResult
 from comment_crawler.core.storage import ReviewStore
+from comment_crawler.core.schema import ReviewRecord, hash_author, stable_hash
 
 
 class XiaohongshuTests(unittest.TestCase):
@@ -118,6 +119,46 @@ class XiaohongshuTests(unittest.TestCase):
             store.upsert(first)
             store.upsert(duplicate)
             self.assertEqual(store.count(), 1)
+
+    def test_legacy_synthetic_comments_and_replies_migrate_without_duplicates(self):
+        url = 'https://www.xiaohongshu.com/explore/0123456789abcdef01234567'
+
+        def legacy_comment(body, author_id, published, parent_id=''):
+            author = hash_author('xiaohongshu', author_id)
+            external_id = 'synthetic:' + stable_hash(f'{url}|{author}|{published}|{body}')
+            return ReviewRecord(
+                'xiaohongshu', 'comment', url, external_id, body=body,
+                parent_id=parent_id, author_hash=author, published_at=published,
+                metadata={'id_kind': 'synthetic'},
+            ).normalize()
+
+        old_parent = legacy_comment('旧版父评论', 'u1', '2天前')
+        old_reply = legacy_comment('旧版回复', 'u2', '2天前', old_parent.external_id)
+        new_parent = xhs_record({'body': '旧版父评论', 'author_id': 'u1', 'time': '3天前'}, url)
+        new_reply = xhs_record({
+            'body': '旧版回复', 'author_id': 'u2', 'time': '3天前',
+            'parent_id': new_parent.external_id,
+        }, url)
+
+        with tempfile.TemporaryDirectory() as tmp, ReviewStore(Path(tmp) / 'records.sqlite3') as store:
+            for legacy in (old_parent, old_reply):
+                payload = legacy.as_dict()
+                store.connection.execute(
+                    """INSERT INTO records (
+                        record_key, source, content_type, external_id, url, published_at,
+                        captured_at, content_hash, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (legacy.record_key, legacy.source, legacy.content_type, legacy.external_id,
+                     legacy.url, legacy.published_at, legacy.captured_at, legacy.content_hash,
+                     json.dumps(payload, ensure_ascii=False, sort_keys=True)),
+                )
+            store.connection.commit()
+            store.upsert(new_parent)
+            store.upsert(new_reply)
+            self.assertEqual(store.count(), 2)
+            records = {record.body: record for record in store.iter_records()}
+            self.assertEqual(records['旧版父评论'].record_key, new_parent.record_key)
+            self.assertEqual(records['旧版回复'].record_key, new_reply.record_key)
 
     def test_comment_scan_keeps_first_synthetic_duplicate_without_counting_an_update(self):
         class Page:

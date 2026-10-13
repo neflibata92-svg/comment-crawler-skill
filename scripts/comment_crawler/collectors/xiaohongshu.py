@@ -366,8 +366,21 @@ def collect_note_comments(page, url: str, result: CollectionResult, delay: float
 def _open(page, url: str) -> None:
     response = page.goto(url, wait_until='domcontentloaded', timeout=60000)
     if response is None or response.status >= 400:
-        raise ValueError(f'页面请求失败 HTTP {response.status if response else "unknown"}')
+        raise PageRequestError(response.status if response else None)
     check_access(page)
+
+
+class PageRequestError(ValueError):
+    def __init__(self, status: int | None, navigation_error: str = ''):
+        self.status = status
+        self.navigation_error = navigation_error
+        if status is not None:
+            message = f'页面请求失败 HTTP {status}'
+        elif navigation_error:
+            message = f'页面导航失败 {navigation_error}'
+        else:
+            message = '页面请求失败 HTTP unknown'
+        super().__init__(message)
 
 
 class XhsProgress:
@@ -382,7 +395,8 @@ class XhsProgress:
                 payload = json.loads(self.path.read_text(encoding='utf-8'))
             except (OSError, json.JSONDecodeError) as exc:
                 raise ValueError('progress.json 无法读取；请检查任务目录') from exc
-            if (not isinstance(payload, dict) or payload.get('version') not in {1, 2}
+            if (not isinstance(payload, dict) or type(payload.get('version')) is not int
+                    or payload.get('version') not in {1, 2}
                     or payload.get('task') != self.task or not isinstance(payload.get('notes'), dict)):
                 raise ValueError('progress.json 与当前任务不一致或格式错误；请检查任务目录')
             self.notes = payload['notes']
@@ -392,6 +406,7 @@ class XhsProgress:
                 valid_statuses.add('completed')
             for note_id, note in self.notes.items():
                 if (not re.fullmatch(r'[0-9a-f]{24}', note_id) or not isinstance(note, dict)
+                        or not isinstance(note.get('status'), str)
                         or note.get('status') not in valid_statuses
                         or not isinstance(note.get('title', ''), str)
                         or not isinstance(note.get('queries', []), list)
@@ -426,7 +441,7 @@ class XhsProgress:
 
 
 def collect_xiaohongshu(config: dict, delay: float, emit=None) -> CollectionResult:
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
     result = CollectionResult('xiaohongshu', emit=emit)
     target = validate_note_url(config['target']) if config.get('target') else ''
@@ -477,13 +492,36 @@ def collect_xiaohongshu(config: dict, delay: float, emit=None) -> CollectionResu
                             entry['queries'].append(query)
             blocked = 0
             opened = 0
+            attempted = 0
             for note_id, note in notes.items():
                 if (progress and not config.get('refresh_completed')
                         and progress.notes.get(note_id, {}).get('status') == 'scanned'):
                     continue
+                attempted += 1
                 if progress:
                     progress.mark(note_id, 'in_progress')
-                _open(page, note['url'])
+                request_error = None
+                try:
+                    _open(page, note['url'])
+                except PageRequestError as exc:
+                    request_error = exc
+                except PlaywrightError as exc:
+                    request_error = PageRequestError(None, type(exc).__name__)
+                if request_error:
+                    exc = request_error
+                    blocked += 1
+                    result.warnings.append(f'{canonical_note_url(note["url"])} {exc}；留待下次重试')
+                    if progress:
+                        progress.mark(note_id, 'pending')
+                    if exc.status in {401, 403, 429}:
+                        result.status = 'backend_limited'
+                        result.warnings.append('笔记页面请求受到访问限制；停止采集并保留待重试检查点')
+                        break
+                    if blocked >= 3:
+                        result.status = 'backend_limited'
+                        result.warnings.append('连续多篇笔记请求失败；停止采集并保留待重试检查点')
+                        break
+                    continue
                 if page_note_id(page) != note_id:
                     # 平台把当前地址重定向到 /404 等拦截页；跳过该笔记，不采拦截页内容。
                     blocked += 1
@@ -517,7 +555,10 @@ def collect_xiaohongshu(config: dict, delay: float, emit=None) -> CollectionResu
                 comments_complete = collect_note_comments(page, note['url'], result, delay, queries=note.get('queries'))
                 if progress:
                     progress.mark(note_id, 'scanned' if comments_complete else 'pending')
-            if notes and opened == 0 and result.status not in ('backend_limited', 'failed'):
+            if notes and attempted == 0 and result.status not in ('backend_limited', 'failed'):
+                result.status = 'completed_visible'
+                result.warnings.append('所有已发现笔记都已有结束可见扫描的检查点；本次无需重复打开')
+            elif notes and opened == 0 and result.status not in ('backend_limited', 'failed'):
                 result.status = 'backend_limited'
                 result.warnings.append('所有笔记都未能打开；本次没有可交付的评论数据')
             result.warnings.append(f'本次发现或指定 {len(notes)} 篇笔记；仅覆盖页面可见笔记字段、搜索结果和评论')

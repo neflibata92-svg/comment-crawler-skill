@@ -7,7 +7,7 @@ from pathlib import Path
 import sqlite3
 from typing import Iterator
 
-from .schema import ReviewRecord
+from .schema import ReviewRecord, stable_hash
 
 
 CSV_COLUMNS = [
@@ -23,6 +23,7 @@ class ReviewStore:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(self.database_path)
         self.connection.row_factory = sqlite3.Row
+        self._migrated_xhs_urls: set[str] = set()
         self._initialize()
 
     def _initialize(self) -> None:
@@ -45,8 +46,99 @@ class ReviewStore:
         self.connection.execute("CREATE INDEX IF NOT EXISTS idx_records_published_at ON records(published_at)")
         self.connection.commit()
 
+    def _migrate_legacy_xhs_comments(self, url: str) -> None:
+        """Convert old author/time-based synthetic IDs before a note is rescanned."""
+        if url in self._migrated_xhs_urls:
+            return
+        rows = self.connection.execute(
+            """SELECT record_key, payload_json FROM records
+               WHERE source = 'xiaohongshu' AND content_type = 'comment' AND url = ?
+               ORDER BY rowid""",
+            (url,),
+        ).fetchall()
+        entries = []
+        by_external_id: dict[str, list[dict]] = {}
+        for row in rows:
+            payload = json.loads(row['payload_json'])
+            metadata = payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}
+            if metadata.get('id_kind') != 'synthetic' or not str(payload.get('external_id', '')).startswith('synthetic:'):
+                continue
+            entry = {'record_key': row['record_key'], 'payload': payload}
+            entries.append(entry)
+            by_external_id.setdefault(payload['external_id'], []).append(entry)
+        if not entries:
+            self._migrated_xhs_urls.add(url)
+            return
+
+        resolved: dict[str, str] = {}
+        resolving: set[str] = set()
+
+        def resolve_external_id(external_id: str) -> str:
+            if external_id in resolved:
+                return resolved[external_id]
+            parents = by_external_id.get(external_id)
+            if not parents:
+                return external_id
+            if external_id in resolving:
+                return external_id
+            resolving.add(external_id)
+            payload = parents[0]['payload']
+            old_parent_id = str(payload.get('parent_id') or '')
+            parent_id = resolve_external_id(old_parent_id) if old_parent_id in by_external_id else old_parent_id
+            migrated = 'synthetic:' + stable_hash(f"{url}|{parent_id}|{payload.get('body', '')}")
+            resolving.remove(external_id)
+            resolved[external_id] = migrated
+            return migrated
+
+        groups: dict[str, list[tuple[ReviewRecord, str]]] = {}
+        for entry in entries:
+            payload = entry['payload']
+            old_parent_id = str(payload.get('parent_id') or '')
+            parent_id = resolve_external_id(old_parent_id) if old_parent_id in by_external_id else old_parent_id
+            external_id = 'synthetic:' + stable_hash(f"{url}|{parent_id}|{payload.get('body', '')}")
+            payload['parent_id'] = parent_id
+            payload['external_id'] = external_id
+            record = ReviewRecord.from_dict(payload)
+            groups.setdefault(record.record_key, []).append((record, entry['record_key']))
+
+        old_keys = [entry['record_key'] for entry in entries]
+        if all(len(group) == 1 and group[0][0].record_key == group[0][1]
+               for group in groups.values()):
+            self._migrated_xhs_urls.add(url)
+            return
+
+        replacements = []
+        for group in groups.values():
+            group.sort(key=lambda item: item[0].captured_at)
+            record = group[-1][0]
+            if len(group) > 1:
+                queries = []
+                for duplicate, _old_key in group:
+                    values = duplicate.metadata.get('queries', [])
+                    if isinstance(values, list):
+                        queries.extend(value for value in values if isinstance(value, str) and value not in queries)
+                if queries:
+                    record.metadata['queries'] = queries
+            payload = record.as_dict()
+            replacements.append((record.record_key, record.source, record.content_type, record.external_id,
+                                 record.url, record.published_at, record.captured_at, record.content_hash,
+                                 json.dumps(payload, ensure_ascii=False, sort_keys=True)))
+
+        with self.connection:
+            self.connection.executemany('DELETE FROM records WHERE record_key = ?', ((key,) for key in old_keys))
+            self.connection.executemany(
+                """INSERT INTO records (
+                    record_key, source, content_type, external_id, url, published_at,
+                    captured_at, content_hash, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                replacements,
+            )
+        self._migrated_xhs_urls.add(url)
+
     def upsert(self, record: ReviewRecord) -> str:
         payload = record.as_dict()
+        if record.source == 'xiaohongshu' and record.content_type == 'comment':
+            self._migrate_legacy_xhs_comments(record.url)
         key = record.record_key
         content_hash = record.content_hash
         existing = self.connection.execute(
