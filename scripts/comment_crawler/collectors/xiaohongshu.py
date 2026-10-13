@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from ..core.schema import ReviewRecord, clean_text, hash_author, stable_hash
 from ..core.utils import CollectionResult
@@ -28,6 +28,17 @@ def note_id_from_url(url: str) -> str:
 
 def canonical_note_url(url: str) -> str:
     return f'https://www.xiaohongshu.com/explore/{note_id_from_url(url)}'
+
+
+def search_url(query: str) -> str:
+    """关键词直接拼成 AI 搜索结果页地址。
+
+    2026-10 页面上的搜索框组件处于隐藏状态（宽高为 0），「打开首页打字再点搜索」
+    的流程会因元素不可见而超时；直接打开搜索结果页地址与人工搜索等效。
+    2026-10-13 实测 search_result_ai 入口对已登录用户返回标准笔记卡片
+    （section.note-item），与旧版 search_result 布局一致，可直接采集。
+    """
+    return f'https://www.xiaohongshu.com/search_result_ai?keyword={quote(query)}'
 
 
 def xhs_record(raw: dict, url: str) -> ReviewRecord:
@@ -220,14 +231,8 @@ def collect_xiaohongshu(config: dict, delay: float, emit=None) -> CollectionResu
                 url = validate_note_url(config['target'])
                 notes[note_id_from_url(url)] = {'url': url, 'title': '', 'queries': []}
             for query in config.get('queries', []):
-                _open(page, HOME)
-                search = page.locator('input#search-input, input[placeholder*="搜索"]').first
-                search.fill(query)
-                button = page.locator('.search-icon').first
-                if button.count():
-                    button.click()
-                else:
-                    search.press('Enter')
+                # 搜索框组件隐藏导致打字流程超时，改为直接打开关键词结果页。
+                _open(page, search_url(query))
                 page.wait_for_timeout(max(1000, delay * 1000))
                 check_access(page)
                 if urlparse(page.url).path not in ('/search_result', '/search_result_ai'):

@@ -1,12 +1,20 @@
 import unittest
 
 from comment_crawler.collectors.xiaohongshu import (
-    check_access, collect_note_comments, discover_notes, note_id_from_url, validate_note_url, xhs_record,
+    check_access, collect_note_comments, discover_notes, note_id_from_url, search_url,
+    validate_note_url, xhs_record,
 )
 from comment_crawler.core.utils import CollectionResult
 
 
 class XiaohongshuTests(unittest.TestCase):
+    def test_search_url_builds_encoded_result_page(self):
+        # 当前页面上的搜索框组件隐藏（宽高为 0），采集器改为直接打开结果页地址。
+        self.assertEqual(search_url('memomind'),
+                         'https://www.xiaohongshu.com/search_result_ai?keyword=memomind')
+        self.assertEqual(search_url('户外相机'),
+                         'https://www.xiaohongshu.com/search_result_ai?keyword=%E6%88%B7%E5%A4%96%E7%9B%B8%E6%9C%BA')
+
     def test_security_redirect_stops_before_collection(self):
         class Page:
             url = 'https://www.xiaohongshu.com/website-login/error?error_code=300012'
