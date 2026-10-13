@@ -66,22 +66,22 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual({r.external_id for r in result.records}, {'t3_a', 't3_b', 't1_areply', 't1_breply'})
         self.assertTrue(all(r.reply_count is None for r in result.records if r.content_type == 'comment'))
 
-    def test_youtube_keeps_partial_data_and_stops_on_error(self):
+    def test_youtube_keeps_collecting_other_videos_and_queries_after_comment_error(self):
         collector = YouTubeCollector({'queries': ['camera', 'second-query']}, {})
         def api(endpoint, params, key):
             if endpoint == 'search':
-                return {'items': [{'id': {'videoId': 'v'}}]}
+                return {'items': [{'id': {'videoId': 'v1' if params['q'] == 'camera' else 'v2'}}]}
             if endpoint == 'videos':
-                return {'items': [{'id': 'v', 'snippet': {'title': 'camera'}}]}
-            if params.get('pageToken'):
+                return {'items': [{'id': params['id'], 'snippet': {'title': 'camera'}}]}
+            if params['videoId'] == 'v1':
                 raise RuntimeError('HTTP 403')
-            return {'items': [{'snippet': {'topLevelComment': {'id': 'c', 'snippet': {'textOriginal': 'saved'}}}}], 'nextPageToken': 'next'}
+            return {'items': [{'snippet': {'topLevelComment': {'id': 'c2', 'snippet': {'textOriginal': 'saved'}}}}]}
         collector._api = api
         with patch.dict(os.environ, {'YOUTUBE_API_KEY': 'fixture'}):
             result = collector.collect()
-        self.assertEqual([r.external_id for r in result.records], ['video:v', 'comment:c'])
+        self.assertEqual([r.external_id for r in result.records], ['video:v1', 'video:v2', 'comment:c2'])
         self.assertEqual(len(result.errors), 1)
-        self.assertIn('403', result.errors[0])
+        self.assertIn('v1', result.errors[0])
 
     def test_opencli_no_twenty_post_cap_and_warns_backend_limit(self):
         collector = OpenCLIRedditCollector({'queries': ['camera'], 'read_comments': False}, {})

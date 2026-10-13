@@ -38,6 +38,14 @@ def path_from_config(value: str, config_dir: Path) -> Path:
     return path if path.is_absolute() else config_dir / path
 
 
+def validate_browser_profile_path(value: str | Path) -> str:
+    """Resolve a browser profile and keep persistent login data outside Git repositories."""
+    path = Path(value).expanduser().resolve()
+    if any((ancestor / ".git").exists() for ancestor in (path, *path.parents)):
+        raise ValueError("浏览器档案必须放在 Git 仓库之外，避免登录会话被提交")
+    return str(path)
+
+
 def required_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:

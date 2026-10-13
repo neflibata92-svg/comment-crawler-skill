@@ -10,8 +10,8 @@ import shutil
 import sys
 
 from .core.schema import utc_now
-from .core.storage import ReviewStore
-from .core.utils import CollectionResult, load_json
+from .core.storage import QualitySummary, ReviewStore
+from .core.utils import CollectionResult, load_json, validate_browser_profile_path
 
 SOURCES = ('youtube', 'reddit', 'reddit_opencli', 'taobao', 'jd', 'kickstarter', 'xiaohongshu')
 
@@ -51,6 +51,8 @@ def parser():
     collect.add_argument('--output', required=True, help='任务输出目录；恢复时用相同目录')
     collect.add_argument('--delay', type=float, help='请求间隔秒数，必须大于 0')
     collect.add_argument('--dry-run', action='store_true', help='只校验输入，不联网、不写输出')
+    collect.add_argument('--refresh-completed', action='store_true',
+                         help='小红书重新扫描已完成笔记，获取可能新增的可见评论')
     for name in ('export', 'check'):
         command = sub.add_parser(name)
         command.add_argument('--output', required=True)
@@ -66,6 +68,10 @@ def resolve_config(args):
         if not isinstance(section, dict):
             raise ValueError('平台配置必须是 JSON 对象')
         config.update(section)
+    if args.refresh_completed:
+        if args.source != 'xiaohongshu':
+            raise ValueError('--refresh-completed 仅适用于小红书')
+        config['refresh_completed'] = True
     for name, key in [('query', 'queries'), ('subreddit', 'subreddits'), ('target', 'target'), ('profile', 'profile'), ('delay', 'delay_seconds')]:
         value = getattr(args, name)
         if value is not None:
@@ -93,7 +99,9 @@ def resolve_config(args):
     if config.get('profile'):
         profile = Path(config['profile']).expanduser()
         # 命令行路径相对 cwd；JSON 内路径相对配置所在目录。
-        config['profile'] = str((profile if profile.is_absolute() else (Path.cwd() if args.profile else config_dir) / profile).resolve())
+        config['profile'] = validate_browser_profile_path(
+            profile if profile.is_absolute() else (Path.cwd() if args.profile else config_dir) / profile
+        )
     delay = float(config.get('delay_seconds', 2))
     if not 0 < delay < float('inf'):
         raise ValueError('delay_seconds 必须是有限正数')
@@ -127,23 +135,39 @@ def run_collect(args):
     if not manifest.exists():
         manifest.write_text(json.dumps(identity, ensure_ascii=False, indent=2) + '\n')
     counts = {'inserted': 0, 'updated': 0, 'unchanged': 0}
+    run_by_content_type = {}
+    quality = QualitySummary()
     result = CollectionResult(args.source)
     interrupted = False
     with ReviewStore(output / 'records.sqlite3') as store:
         def emit(record):
             counts[store.upsert(record)] += 1
+            run_by_content_type[record.content_type] = run_by_content_type.get(record.content_type, 0) + 1
+            quality.add(record)
+
+        if args.source == 'xiaohongshu':
+            config['output_dir'] = str(output)
+            config['existing_post_ids'] = {
+                value.removeprefix('note:') for value in store.external_ids('xiaohongshu', 'post')
+                if value.startswith('note:')
+            }
         try:
             result = dispatch(args.source, config, output, emit)
         except KeyboardInterrupt:
             interrupted = True
             result.status = 'interrupted'
-            result.errors.append('用户中断；此前已提交的记录保留。重新运行会从头扫描并去重。')
+            if args.source == 'xiaohongshu':
+                result.errors.append('用户中断；已提交记录保留。使用相同任务和输出目录重跑以按笔记检查点恢复。')
+            else:
+                result.errors.append('用户中断；此前已提交的记录保留。重新运行会从头扫描并去重。')
         except Exception as exc:
             result.errors.append(f'运行失败：{type(exc).__name__}')
         if result.errors and not interrupted:
             result.status = 'failed'
         report = {'source': args.source, 'status': result.status, 'finished_at': utc_now(), **counts,
                   'fetched': sum(counts.values()), 'total_saved': store.count(),
+                  'by_content_type': dict(sorted(run_by_content_type.items())),
+                  'field_coverage': quality.as_dict(),
                   'warnings': result.warnings, 'errors': result.errors,
                   'coverage': '仅本次入口返回的可见记录，不等同于平台全量'}
         # 报告先落盘，即使导出被中断，SQLite 与运行状态仍保留。
@@ -172,12 +196,13 @@ def main(argv=None):
         if args.command == 'doctor':
             return doctor()
         if args.command == 'login':
+            profile = validate_browser_profile_path(args.profile)
             if args.source == 'xiaohongshu':
                 from .collectors.xiaohongshu import login_xiaohongshu
-                login_xiaohongshu(args.profile)
+                login_xiaohongshu(profile)
             else:
                 from .collectors.browser import login
-                login(args.source, args.profile)
+                login(args.source, profile)
             return 0
         if args.command == 'collect':
             return run_collect(args)
@@ -188,7 +213,18 @@ def main(argv=None):
             if args.command == 'export':
                 store.export_csv(output / 'records.csv')
                 store.export_jsonl(output / 'records.jsonl')
-            print(json.dumps({'total_saved': store.count(), 'by_source': store.summary_by_source()}, ensure_ascii=False))
+            last_run_path = output / 'last_run.json'
+            try:
+                last_run = json.loads(last_run_path.read_text(encoding='utf-8')) if last_run_path.exists() else None
+            except json.JSONDecodeError as exc:
+                raise ValueError('last_run.json 不是合法 JSON；请先检查任务目录') from exc
+            print(json.dumps({
+                'total_saved': store.count(),
+                'by_source': store.summary_by_source(),
+                'by_content_type': store.summary_by_content_type(),
+                'quality': store.quality_summary(),
+                'last_run': last_run,
+            }, ensure_ascii=False))
         return 0
     except (ValueError, OSError) as exc:
         print(str(exc), file=sys.stderr)

@@ -96,6 +96,18 @@ class ReviewStore:
         )
         return {row["source"]: int(row["total"]) for row in rows}
 
+    def summary_by_content_type(self) -> dict[str, int]:
+        rows = self.connection.execute(
+            "SELECT content_type, COUNT(*) AS total FROM records GROUP BY content_type ORDER BY content_type"
+        )
+        return {row["content_type"]: int(row["total"]) for row in rows}
+
+    def quality_summary(self) -> dict[str, dict]:
+        summary = QualitySummary()
+        for record in self.iter_records():
+            summary.add(record)
+        return summary.as_dict()
+
     def external_ids(self, source: str, content_type: str) -> set[str]:
         """返回已有记录的外部 ID，用于续跑时避免重复请求详情。"""
         rows = self.connection.execute(
@@ -136,3 +148,45 @@ class ReviewStore:
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+
+class QualitySummary:
+    """Count populated fields by record type without retaining record contents."""
+
+    FIELDS = {
+        "post": ("title", "body", "author_hash", "published_at"),
+        "comment": ("body", "author_hash", "published_at"),
+        "default": ("title", "body", "author_hash", "published_at"),
+    }
+    ENGAGEMENT = ("likes", "saves", "comments", "shares")
+
+    def __init__(self):
+        self.groups: dict[str, dict] = {}
+
+    def add(self, record: ReviewRecord) -> None:
+        content_type = record.content_type or "unknown"
+        group = self.groups.setdefault(content_type, {
+            "records": 0,
+            "fields": {name: {"present": 0, "missing": 0}
+                       for name in self.FIELDS.get(content_type, self.FIELDS["default"])},
+        })
+        group["records"] += 1
+        for name in self.FIELDS.get(content_type, self.FIELDS["default"]):
+            group["fields"][name]["present" if bool(getattr(record, name, "")) else "missing"] += 1
+        if record.source == "xiaohongshu":
+            ids = group.setdefault("ids", {"platform": 0, "synthetic": 0, "unknown": 0})
+            id_kind = record.metadata.get("id_kind") if isinstance(record.metadata, dict) else None
+            if not id_kind and content_type == "post" and record.external_id.startswith("note:"):
+                id_kind = "platform"
+            ids[id_kind if id_kind in ("platform", "synthetic") else "unknown"] += 1
+        if content_type == "post":
+            engagement = record.metadata.get("visible_engagement", {}) if isinstance(record.metadata, dict) else {}
+            counts = group.setdefault("visible_engagement", {
+                name: {"present": 0, "missing": 0} for name in self.ENGAGEMENT
+            })
+            for name in self.ENGAGEMENT:
+                value = engagement.get(name, "") if isinstance(engagement, dict) else ""
+                counts[name]["present" if bool(str(value).strip()) else "missing"] += 1
+
+    def as_dict(self) -> dict[str, dict]:
+        return {content_type: values for content_type, values in sorted(self.groups.items())}

@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import html
 import json
-from pathlib import Path
 import re
 import time
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from ..core.schema import ReviewRecord, clean_text, hash_author, stable_hash
-from ..core.utils import CollectionResult
+from ..core.utils import CollectionResult, validate_browser_profile_path
 from .taobao_dom import EXTRACT_JS, OPEN_DRAWER_JS, SCROLL_DRAWER_JS
 
 
@@ -201,7 +200,7 @@ def browser_collect(source: str, target: str, profile: str | None, delay: float,
             if source in ('taobao', 'jd'):
                 if not profile:
                     raise ValueError('此平台需要 --profile 指向已登录的专用本地浏览器目录')
-                context = pw.chromium.launch_persistent_context(str(Path(profile).expanduser().resolve()), headless=False)
+                context = pw.chromium.launch_persistent_context(validate_browser_profile_path(profile), headless=False)
             else:
                 browser = pw.chromium.launch(headless=True)
                 context = browser.new_context()
@@ -223,7 +222,7 @@ def login(source: str, profile: str) -> None:
     from playwright.sync_api import sync_playwright
     url = {'jd': 'https://passport.jd.com/new/login.aspx', 'taobao': 'https://login.taobao.com'}[source]
     with sync_playwright() as pw:
-        context = pw.chromium.launch_persistent_context(str(Path(profile).expanduser().resolve()), headless=False)
+        context = pw.chromium.launch_persistent_context(validate_browser_profile_path(profile), headless=False)
         try:
             context.new_page().goto(url, timeout=60000)
             input('请在浏览器完成自己的账户登录，成功后回终端按回车保存会话：')

@@ -23,6 +23,16 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(['collect', 'xiaohongshu', '--query', '相机',
                                    '--output', str(Path(tmp) / 'missing'), '--dry-run']), 1)
 
+    def test_refresh_completed_is_passed_to_xiaohongshu_collector(self):
+        captured = {}
+        def collect(source, config, output, emit):
+            captured.update(config)
+            return CollectionResult(source)
+        with tempfile.TemporaryDirectory() as tmp, patch('comment_crawler.cli.dispatch', collect), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(['collect', 'xiaohongshu', '--query', 'memomind', '--profile', tmp,
+                                   '--output', str(Path(tmp) / 'run'), '--refresh-completed']), 0)
+        self.assertTrue(captured['refresh_completed'])
+
     def test_xiaohongshu_task_manifest_does_not_store_signed_token(self):
         def collect(source, config, output, emit):
             return CollectionResult(source)
@@ -31,6 +41,52 @@ class CliTests(unittest.TestCase):
                                    'https://www.xiaohongshu.com/explore/0123456789abcdef01234567?xsec_token=secret',
                                    '--profile', tmp, '--output', str(Path(tmp) / 'note')]), 0)
             self.assertNotIn('secret', (Path(tmp) / 'note' / 'task.json').read_text())
+
+    def test_browser_profile_inside_repository_is_rejected_for_collect_and_login(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stderr(io.StringIO()):
+            repository = Path(tmp) / 'checkout'
+            (repository / '.git').mkdir(parents=True)
+            profile = repository / 'profiles' / 'xiaohongshu'
+            self.assertEqual(main(['collect', 'xiaohongshu', '--query', 'memomind', '--profile', str(profile),
+                                   '--output', str(Path(tmp) / 'run'), '--dry-run']), 1)
+            with patch('comment_crawler.collectors.xiaohongshu.login_xiaohongshu') as login:
+                self.assertEqual(main(['login', 'xiaohongshu', '--profile', str(profile)]), 1)
+                login.assert_not_called()
+
+    def test_check_reports_content_types_quality_and_last_run_status(self):
+        def collect(source, config, output, emit):
+            emit(ReviewRecord('xiaohongshu', 'post', 'https://www.xiaohongshu.com/explore/0123456789abcdef01234567',
+                              'note:0123456789abcdef01234567', title='标题',
+                              metadata={'visible_engagement': {'likes': '12', 'shares': ''}}))
+            emit(ReviewRecord('xiaohongshu', 'comment', 'https://www.xiaohongshu.com/explore/0123456789abcdef01234567',
+                              'synthetic:comment', body='正文'))
+            return CollectionResult(source)
+        with tempfile.TemporaryDirectory() as tmp, patch('comment_crawler.cli.dispatch', collect), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(['collect', 'xiaohongshu', '--query', 'memomind', '--profile', tmp,
+                                   '--output', tmp]), 0)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(main(['check', '--output', tmp]), 0)
+            report = json.loads(output.getvalue())
+            self.assertEqual(report['last_run']['status'], 'completed_visible')
+            self.assertEqual(report['by_content_type'], {'comment': 1, 'post': 1})
+            self.assertEqual(report['quality']['post']['fields']['body']['missing'], 1)
+            self.assertEqual(report['quality']['post']['visible_engagement']['shares']['missing'], 1)
+            self.assertEqual(report['quality']['post']['ids']['platform'], 1)
+            self.assertNotIn('title', report['quality']['comment']['fields'])
+
+    def test_last_run_reports_content_types_and_synthetic_id_quality(self):
+        def collect(source, config, output, emit):
+            emit(ReviewRecord('xiaohongshu', 'comment', 'https://www.xiaohongshu.com/explore/0123456789abcdef01234567',
+                              'synthetic:c1', body='评论', metadata={'id_kind': 'synthetic'}))
+            return CollectionResult(source)
+        with tempfile.TemporaryDirectory() as tmp, patch('comment_crawler.cli.dispatch', collect), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(['collect', 'xiaohongshu', '--query', 'memomind', '--profile', tmp,
+                                   '--output', tmp]), 0)
+            report = json.loads((Path(tmp) / 'last_run.json').read_text())
+            self.assertEqual(report['by_content_type'], {'comment': 1})
+            self.assertEqual(report['field_coverage']['comment']['records'], 1)
+            self.assertEqual(report['field_coverage']['comment']['ids']['synthetic'], 1)
 
     def test_dry_run_does_not_create_output_or_require_credentials(self):
         with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):

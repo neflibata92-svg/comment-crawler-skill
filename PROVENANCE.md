@@ -8,7 +8,7 @@
 | collectors/youtube.py | memomind_crawler/collectors/youtube.py | 去掉品牌过滤、完整分页、缺失回复补齐、旧视频更新、sink 写入 |
 | collectors/reddit.py | memomind_crawler/collectors/reddit.py | 搜索分页、更多评论展开、sink 写入 |
 | collectors/reddit_opencli.py | memomind_crawler/collectors/reddit_opencli.py | 独立 source、移除产品过滤、保留后端限制提示 |
-| collectors/xiaohongshu.py | 本分支新写；参考 OpenCLI 的公开页面选择器和 xiaohongshu-mcp 的评论展开说明 | 普通 Playwright 页面读取、关键词和笔记链接、无固定本地总量上限；未复制第三方源码 |
+| collectors/xiaohongshu.py | 本仓库新写；参考 OpenCLI 的公开页面选择器和 xiaohongshu-mcp 的评论展开说明 | 普通 Playwright 页面读取、关键词和笔记链接；按笔记检查点续跑、去重并报告字段质量；未复制第三方源码 |
 | core | memomind_crawler/core | 去掉产品主题推断，保留字段、幂等 upsert 和导出 |
 | Skill 文档 | 本地方法参考及本次源码核对 | 按平台分层、明确权限／覆盖／验证状态 |
 
@@ -16,4 +16,4 @@
 
 本版本不包含人工导入、媒体测评、历史产品数据或原环境配置。原始项目保留在作者本机，发布仓库独立历史。
 
-本次验证：离线合成响应、SQLite 提交与恢复、CLI 预检、安装及技能场景检查。没有执行真实平台采集，也没有证明普通 Playwright 在当前平台登录／评论页可用。平台文档链接用于接口形状核对，不代表平台认可此工具。
+本次本地验证包括离线合成响应、SQLite 提交与恢复、CLI 预检、字段质量统计和小红书合成 DOM。另有一次用户在登录态进行的 `memomind` 实际试采，过程中被用户中断；数据质量和范围边界见 [验收记录](VALIDATION.md)。该试采发生在当前续跑与时间规范化实现之前，不证明当前版本在真实账户中的选择器、权限或全量性。平台文档链接用于接口形状核对，不代表平台认可此工具。

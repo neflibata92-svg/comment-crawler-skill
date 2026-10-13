@@ -16,7 +16,7 @@ def utc_now() -> str:
 
 def clean_text(value: Any) -> str:
     """压缩空白，避免 CSV/SQLite 中出现难以阅读的换行。"""
-    return re.sub(r"\s+", " ", str(value or "")).strip()
+    return "" if value is None or value is False else re.sub(r"\s+", " ", str(value)).strip()
 
 
 def stable_hash(value: str, length: int = 20) -> str:
@@ -36,7 +36,10 @@ def to_iso8601(value: Any) -> str:
     if value in (None, ""):
         return ""
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=timezone.utc).replace(microsecond=0).isoformat()
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc).replace(microsecond=0).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return ""
     text = clean_text(value)
     if not text:
         return ""
@@ -45,7 +48,7 @@ def to_iso8601(value: Any) -> str:
     try:
         parsed = datetime.fromisoformat(text)
     except ValueError:
-        return text
+        return ""
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat()
@@ -100,7 +103,10 @@ class ReviewRecord:
         self.external_id = clean_text(self.external_id) or stable_hash(
             f"{self.source}|{self.content_type}|{self.url}|{self.parent_id}|{self.title}|{self.body}"
         )
+        raw_published_at = clean_text(self.published_at)
         self.published_at = to_iso8601(self.published_at)
+        if raw_published_at and not self.published_at:
+            self.metadata.setdefault("published_at_raw", raw_published_at)
         self.captured_at = to_iso8601(self.captured_at) or utc_now()
         corpus = f"{self.title}\n{self.body}"
         self.language = self.language or detect_language(corpus)

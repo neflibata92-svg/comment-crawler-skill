@@ -1,13 +1,22 @@
 import tempfile
 import unittest
 from pathlib import Path
-from comment_crawler.core.schema import ReviewRecord
+from comment_crawler.core.schema import ReviewRecord, clean_text, to_iso8601
 from comment_crawler.core.storage import ReviewStore
 from comment_crawler.core.utils import CollectionResult
 from comment_crawler.collectors.reddit_opencli import OpenCLIRedditCollector
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_schema_preserves_zero_and_separates_unparsed_time(self):
+        self.assertEqual(clean_text(0), '0')
+        self.assertEqual(clean_text(False), '')
+        self.assertEqual(to_iso8601('页面时间格式未知'), '')
+        record = ReviewRecord('youtube', 'comment', 'https://example.org', 'c',
+                              body='text', published_at='页面时间格式未知').normalize()
+        self.assertEqual(record.published_at, '')
+        self.assertEqual(record.metadata['published_at_raw'], '页面时间格式未知')
+
     def test_sink_commits_before_collector_finishes_and_does_not_buffer(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'records.sqlite3'

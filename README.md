@@ -1,10 +1,10 @@
 # Comment Crawler Skill
 
-中文优先的多平台评论采集 Skill，也可作为独立 Python CLI 使用。覆盖淘宝／天猫、京东、Kickstarter、Reddit、YouTube，并在开发分支试验小红书；关键词由使用者指定，没有内置品牌过滤或本地总页数上限。评论逐条写入 SQLite，可导出 CSV、JSONL，并记录覆盖限制与失败原因。
+中文优先的多平台评论采集 Skill，也可作为独立 Python CLI 使用。覆盖淘宝／天猫、京东、Kickstarter、Reddit、YouTube 和小红书；关键词由使用者指定，没有内置品牌过滤或本地总页数上限。笔记与评论逐条写入 SQLite，可导出 CSV、JSONL，并记录覆盖限制与失败原因。
 
 **先选入口：** YouTube 使用 Data API Key；Reddit 推荐 OAuth，也可单独使用已登录 Chrome 中的 OpenCLI；淘宝／天猫、京东和小红书使用用户手动登录的专用浏览器档案；Kickstarter 从公开项目页进入。各入口的实际可见范围不同，不能把“程序没有设页数上限”理解为平台保证全量。
 
-**v0.1.0 验证边界：** 原作者确认历史脚本曾完整采集目标信息；本发布版已重构为普通 Playwright 与通用 CLI，仅进行离线测试、安装和合成样例验证，尚未进行真实平台复测。接口、登录权限和页面结构可能变化。“分页结束”不表示平台所有评论均可见。
+**v0.1.0 验证边界：** 2026-10-13 已在用户登录态用 `memomind` 做过一次小红书试采，用户中断了运行；结果与字段缺失见 [验收记录](VALIDATION.md)。这次试采不证明全量或后续页面结构仍然可用。其他平台的权限、配额和接口也需分别核实；“分页结束”不表示平台所有评论均可见。
 
 ## 安装
 
@@ -55,18 +55,20 @@ comment-crawler export --output ./runs/product-youtube
 淘宝／天猫和京东需要先打开**独立档案**，由用户在弹出的浏览器中自行登录，再用同一个档案采集。例如：
 
 ```bash
-comment-crawler login jd --profile ./profiles/jd
-comment-crawler collect jd --target 'https://item.jd.com/123456.html' --profile ./profiles/jd --output ./runs/product-jd --dry-run
+comment-crawler login jd --profile ~/Library/Application\ Support/comment-crawler/jd
+comment-crawler collect jd --target 'https://item.jd.com/123456.html' --profile ~/Library/Application\ Support/comment-crawler/jd --output ./runs/product-jd --dry-run
 ```
 
-检查目标后，去掉第二条命令的 `--dry-run` 即可开始。`profiles/` 含登录状态，请放在仓库外或自行保护；本仓库 `.gitignore` 会忽略该目录。Reddit 两种入口的差异及各平台命令见下表和对应指南。
+检查目标后，去掉第二条命令的 `--dry-run` 即可开始。浏览器档案必须位于所有 Git 仓库之外；程序会拒绝仓库内路径。Reddit 两种入口的差异及各平台命令见下表和对应指南。
 
-小红书开发分支支持关键词和笔记链接两种入口。用户在专用浏览器中自行完成登录；登录命令只检查页面是否显示拦截，真实搜索及评论权限仍需采集试运行确认：
+小红书支持关键词和笔记链接两种入口。采集器分别保存页面可见的笔记标题、正文、匿名作者标识、发布时间和互动数，以及评论和楼中楼。用户在专用浏览器中自行完成登录；登录命令只检查页面是否显示拦截，真实搜索及评论权限仍需采集试运行确认：
 
 ```bash
-comment-crawler login xiaohongshu --profile ./profiles/xiaohongshu
-comment-crawler collect xiaohongshu --query '相机体验' --profile ./profiles/xiaohongshu --output ./runs/xhs-camera --dry-run
-comment-crawler collect xiaohongshu --query '相机体验' --profile ./profiles/xiaohongshu --output ./runs/xhs-camera --delay 2
+comment-crawler login xiaohongshu --profile ~/Library/Application\ Support/comment-crawler/xiaohongshu
+comment-crawler collect xiaohongshu --query '相机体验' --profile ~/Library/Application\ Support/comment-crawler/xiaohongshu --output ./runs/xhs-camera --dry-run
+comment-crawler collect xiaohongshu --query '相机体验' --profile ~/Library/Application\ Support/comment-crawler/xiaohongshu --output ./runs/xhs-camera --delay 2
+# 重新扫描此前已结束可见扫描的笔记
+comment-crawler collect xiaohongshu --query '相机体验' --profile ~/Library/Application\ Support/comment-crawler/xiaohongshu --output ./runs/xhs-camera --refresh-completed --delay 2
 ```
 
 也可将 `--query` 改为 `--target 'https://www.xiaohongshu.com/explore/笔记ID'`。关键词可以重复传入；同一任务目录固定关键词和目标。完整登录步骤及采集边界见[小红书指南](references/xiaohongshu.md)。
@@ -83,7 +85,7 @@ API 也支持 `--config examples/config.json`；命令行参数覆盖同名配�
 | 淘宝／天猫 | 专用档案中由用户登录 | 无固定滚动上限；6 轮无变化后标记 `stalled` |
 | 京东 | 专用档案中由用户登录 | 无固定总页数；每次从首页扫描并去重／更新 |
 | Kickstarter | 公开项目页 | 跟随下一页；保存返回的父 ID，未证明全部子回复覆盖 |
-| 小红书（开发分支） | 专用档案中由用户自行登录 | 关键词发现笔记或指定笔记，读取可见评论和楼中楼；连续无新增标记 `stalled`，尚未真实平台复测 |
+| 小红书 | 专用档案中由用户自行登录 | 关键词发现笔记或指定笔记，另存可见笔记字段及评论、楼中楼；连续无新增标记 `stalled`，不保证全量 |
 
 逐平台操作：[YouTube](references/youtube.md) · [Reddit](references/reddit.md) · [淘宝／天猫](references/taobao.md) · [京东](references/jd.md) · [Kickstarter](references/kickstarter.md) · [小红书](references/xiaohongshu.md)
 
@@ -96,9 +98,10 @@ API 也支持 `--config examples/config.json`；命令行参数覆盖同名配�
 - `records.sqlite3`：每条记录立即提交的主库。
 - `records.csv`、`records.jsonl`：结束时的导出；可用 `export` 重新生成。
 - `task.json`：来源及目标，防止误将不同任务混入同一目录。
-- `last_run.json`：新增、更新、未变化、错误、覆盖限制和结束状态。
+- `last_run.json`：新增、更新、未变化、按内容类型统计、字段完整度、错误和结束状态。
+- `progress.json`（小红书）：按笔记保存待处理／处理中／可见扫描结束状态，不含浏览器会话或签名链接。
 
-Ctrl+C 保留已提交记录；相同命令和输出目录会从头重新扫描并去重，**不是保存游标直接续传**。强制终止可能留下旧报告或不完整导出，SQLite 是恢复依据。未承诺检测平台删除的评论；本地旧记录不会自动删除。
+Ctrl+C 会保留已提交记录。小红书按笔记写入检查点；搜索结果每次重新进入并扫描，因为页面没有可持久化的搜索游标，已发现的笔记会立即记入检查点。中断中的笔记从评论扫描起点重读，并按稳定记录键去重。默认跳过“可见扫描结束”的笔记；使用 `--refresh-completed` 可重新扫描这些笔记，获取可能新增的可见评论。连续六轮无新增只表示当前页面扫描停滞，不证明平台全量。旧版任务若没有 `progress.json`，会先将数据库里已有笔记作为待扫描项重扫一次；旧检查点会自动迁移。其他平台仍可能从头扫描，依靠 SQLite 去重。强制终止可能留下旧报告或不完整导出，SQLite 是恢复依据；本地旧记录不会自动删除。
 
 一次运行只选一个平台后端。Reddit OAuth 的来源为 `reddit`，OpenCLI 为 `reddit_opencli`，且应分任务目录使用；不要把两路评论直接合计。旧项目数据库不自动迁移。
 
@@ -120,7 +123,7 @@ python scripts/crawl.py doctor
 python scripts/crawl.py collect youtube --query 'fixture camera' --output ./runs/fixture --dry-run
 ```
 
-测试使用合成响应，不读取真实评论或凭据，不启动平台采集。CI 检查 Python 3.11–3.14 的安装与离线行为；浏览器安装不等于登录和平台访问验证。
+测试使用合成响应，不读取真实评论或凭据，不启动平台采集。CI 检查 Python 3.11–3.14 的离线行为，并在独立 job 安装 Chromium 运行小红书 DOM 合成测试；这些测试不验证账户登录或真实平台访问。
 
 ## 来源与许可
 

@@ -1,6 +1,8 @@
 import unittest
 
-from comment_crawler.collectors.xiaohongshu import COMMENT_ROWS_JS, EXPAND_REPLIES_JS, SEARCH_ROWS_JS
+from comment_crawler.collectors.xiaohongshu import (
+    COMMENT_ROWS_JS, EXPAND_REPLIES_JS, NOTE_DETAILS_JS, SEARCH_ROWS_JS,
+)
 
 try:
     from playwright.sync_api import sync_playwright
@@ -10,6 +12,40 @@ except ImportError:
 
 @unittest.skipUnless(sync_playwright, '需要 browser extra')
 class XiaohongshuDomTests(unittest.TestCase):
+    def test_note_details_extract_visible_post_fields_and_engagement(self):
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('''
+                  <div id="noteContainer">
+                    <div class="note-content">
+                      <h1 id="detail-title">Memomind 使用体验</h1>
+                      <div id="detail-desc">一篇合成笔记正文</div>
+                      <span class="date">2026-10-13</span>
+                    </div>
+                    <div class="author-wrapper">
+                      <a href="/user/profile/user_1"><span class="name">公开昵称</span></a>
+                    </div>
+                    <div class="like-wrapper"><span class="count">1.2万</span></div>
+                    <div class="collect-wrapper"><span class="count">345</span></div>
+                    <div class="chat-wrapper"><span class="count">67</span></div>
+                    <div class="share-wrapper"><span class="count">8</span></div>
+                  </div>
+                ''')
+                data = page.evaluate(NOTE_DETAILS_JS)
+                self.assertEqual(data['title'], 'Memomind 使用体验')
+                self.assertEqual(data['body'], '一篇合成笔记正文')
+                self.assertEqual(data['author_id'], 'user_1')
+                self.assertEqual(data['author'], '公开昵称')
+                self.assertEqual(data['published_at'], '2026-10-13')
+                self.assertEqual(data['likes'], '1.2万')
+                self.assertEqual(data['saves'], '345')
+                self.assertEqual(data['comments'], '67')
+                self.assertEqual(data['shares'], '8')
+            finally:
+                browser.close()
+
     def test_search_cards_and_nested_comments_from_rendered_dom(self):
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)

@@ -151,17 +151,24 @@ class YouTubeCollector:
                             seen_video_ids.add(video_id)
                     if not ids:
                         continue
-                    details = self._api("videos", {"part": "snippet,statistics", "id": ",".join(ids)}, api_key)
+                    try:
+                        details = self._api("videos", {"part": "snippet,statistics", "id": ",".join(ids)}, api_key)
+                    except Exception as exc:
+                        result.errors.append(f"YouTube 视频详情读取失败 {query}：{type(exc).__name__}")
+                        continue
                     for item in details.get("items", []):
                         video_id = clean_text(item.get("id"))
                         if not video_id:
                             continue
                         result.add(self._video_record(item))
-                        # 已存视频仍刷新评论；SQLite 使用稳定 ID 去重。
-                        result.extend(self._comments(video_id, api_key))
+                        # 已存视频仍刷新评论；单个视频失败不应阻断其余搜索结果。
+                        try:
+                            result.extend(self._comments(video_id, api_key))
+                        except Exception as exc:
+                            result.errors.append(f"YouTube 评论读取失败 {video_id}：{type(exc).__name__}")
             except Exception as exc:
                 result.errors.append(f"YouTube 采集中断 {query}：{type(exc).__name__}: {exc}")
-                break
+                continue
         return result
 
     @staticmethod
