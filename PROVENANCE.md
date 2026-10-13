@@ -8,6 +8,7 @@
 | collectors/youtube.py | memomind_crawler/collectors/youtube.py | 去掉品牌过滤、完整分页、缺失回复补齐、旧视频更新、sink 写入 |
 | collectors/reddit.py | memomind_crawler/collectors/reddit.py | 搜索分页、更多评论展开、sink 写入 |
 | collectors/reddit_opencli.py | memomind_crawler/collectors/reddit_opencli.py | 独立 source、移除产品过滤、保留后端限制提示 |
+| collectors/xiaohongshu.py | 本分支新写；参考 OpenCLI 的公开页面选择器和 xiaohongshu-mcp 的评论展开说明 | 普通 Playwright 页面读取、关键词和笔记链接、无固定本地总量上限；未复制第三方源码 |
 | core | memomind_crawler/core | 去掉产品主题推断，保留字段、幂等 upsert 和导出 |
 | Skill 文档 | 本地方法参考及本次源码核对 | 按平台分层、明确权限／覆盖／验证状态 |
 

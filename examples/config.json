@@ -1,5 +1,6 @@
 {
   "youtube": {"queries": ["camera review"], "read_comments": true, "delay_seconds": 2},
   "reddit": {"queries": ["camera"], "subreddits": ["photography"], "user_agent": "CommentCrawler/0.1 by YOUR_REDDIT_USERNAME", "read_comments": true, "delay_seconds": 2},
-  "reddit_opencli": {"queries": ["camera"], "subreddits": ["photography"], "read_comments": true, "timeout_seconds": 120, "delay_seconds": 2}
+  "reddit_opencli": {"queries": ["camera"], "subreddits": ["photography"], "read_comments": true, "timeout_seconds": 120, "delay_seconds": 2},
+  "xiaohongshu": {"queries": ["相机体验"], "profile": "../profiles/xiaohongshu", "delay_seconds": 2}
 }

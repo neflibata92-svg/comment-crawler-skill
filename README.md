@@ -1,8 +1,8 @@
 # Comment Crawler Skill
 
-中文优先的多平台评论采集 Skill，也可作为独立 Python CLI 使用。覆盖淘宝／天猫、京东、Kickstarter、Reddit 和 YouTube；关键词由使用者指定，没有内置品牌过滤或本地总页数上限。评论逐条写入 SQLite，可导出 CSV、JSONL，并记录覆盖限制与失败原因。
+中文优先的多平台评论采集 Skill，也可作为独立 Python CLI 使用。覆盖淘宝／天猫、京东、Kickstarter、Reddit、YouTube，并在开发分支试验小红书；关键词由使用者指定，没有内置品牌过滤或本地总页数上限。评论逐条写入 SQLite，可导出 CSV、JSONL，并记录覆盖限制与失败原因。
 
-**先选入口：** YouTube 使用 Data API Key；Reddit 推荐 OAuth，也可单独使用已登录 Chrome 中的 OpenCLI；淘宝／天猫和京东使用用户手动登录的专用浏览器档案；Kickstarter 从公开项目页进入。各入口的实际可见范围不同，不能把“程序没有设页数上限”理解为平台保证全量。
+**先选入口：** YouTube 使用 Data API Key；Reddit 推荐 OAuth，也可单独使用已登录 Chrome 中的 OpenCLI；淘宝／天猫、京东和小红书使用用户手动登录的专用浏览器档案；Kickstarter 从公开项目页进入。各入口的实际可见范围不同，不能把“程序没有设页数上限”理解为平台保证全量。
 
 **v0.1.0 验证边界：** 原作者确认历史脚本曾完整采集目标信息；本发布版已重构为普通 Playwright 与通用 CLI，仅进行离线测试、安装和合成样例验证，尚未进行真实平台复测。接口、登录权限和页面结构可能变化。“分页结束”不表示平台所有评论均可见。
 
@@ -61,6 +61,16 @@ comment-crawler collect jd --target 'https://item.jd.com/123456.html' --profile 
 
 检查目标后，去掉第二条命令的 `--dry-run` 即可开始。`profiles/` 含登录状态，请放在仓库外或自行保护；本仓库 `.gitignore` 会忽略该目录。Reddit 两种入口的差异及各平台命令见下表和对应指南。
 
+小红书开发分支支持关键词和笔记链接两种入口。用户在专用浏览器中自行完成登录；登录命令只检查页面是否显示拦截，真实搜索及评论权限仍需采集试运行确认：
+
+```bash
+comment-crawler login xiaohongshu --profile ./profiles/xiaohongshu
+comment-crawler collect xiaohongshu --query '相机体验' --profile ./profiles/xiaohongshu --output ./runs/xhs-camera --dry-run
+comment-crawler collect xiaohongshu --query '相机体验' --profile ./profiles/xiaohongshu --output ./runs/xhs-camera --delay 2
+```
+
+也可将 `--query` 改为 `--target 'https://www.xiaohongshu.com/explore/笔记ID'`。关键词可以重复传入；同一任务目录固定关键词和目标。完整登录步骤及采集边界见[小红书指南](references/xiaohongshu.md)。
+
 API 也支持 `--config examples/config.json`；命令行参数覆盖同名配置。配置中的相对 profile 路径以配置目录为基准，命令行相对路径以当前目录为基准。凭据仅从环境变量读取。
 
 ## 支持范围
@@ -73,8 +83,9 @@ API 也支持 `--config examples/config.json`；命令行参数覆盖同名配�
 | 淘宝／天猫 | 专用档案中由用户登录 | 无固定滚动上限；6 轮无变化后标记 `stalled` |
 | 京东 | 专用档案中由用户登录 | 无固定总页数；每次从首页扫描并去重／更新 |
 | Kickstarter | 公开项目页 | 跟随下一页；保存返回的父 ID，未证明全部子回复覆盖 |
+| 小红书（开发分支） | 专用档案中由用户自行登录 | 关键词发现笔记或指定笔记，读取可见评论和楼中楼；连续无新增标记 `stalled`，尚未真实平台复测 |
 
-逐平台操作：[YouTube](references/youtube.md) · [Reddit](references/reddit.md) · [淘宝／天猫](references/taobao.md) · [京东](references/jd.md) · [Kickstarter](references/kickstarter.md)
+逐平台操作：[YouTube](references/youtube.md) · [Reddit](references/reddit.md) · [淘宝／天猫](references/taobao.md) · [京东](references/jd.md) · [Kickstarter](references/kickstarter.md) · [小红书](references/xiaohongshu.md)
 
 人工导入、媒体文章、发布评论、私密社区和自动绕过验证不属于本包功能。程序只读评论，不自动登录或代用户完成验证。
 

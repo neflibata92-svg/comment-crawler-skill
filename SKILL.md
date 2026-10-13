@@ -1,6 +1,6 @@
 ---
 name: comment-crawler
-description: Use when 用户需要采集、更新或检查淘宝/天猫、京东、Kickstarter、Reddit、YouTube 的评论，或需要选择对应采集方法、诊断分页和完整度；不用于发帖、账号操作代办、人工导入或泛化网页搜索。
+description: Use when 用户需要采集、更新或检查淘宝/天猫、京东、Kickstarter、Reddit、YouTube 或小红书的评论，或需要选择对应采集方法、诊断分页和完整度；不用于发帖、账号操作代办、人工导入或泛化网页搜索。
 license: MIT
 ---
 
@@ -18,6 +18,7 @@ license: MIT
    - [淘宝／天猫](references/taobao.md)：专用浏览器登录、评论抽屉和追评。
    - [京东](references/jd.md)：专用浏览器登录、商品评论分页。
    - [Kickstarter](references/kickstarter.md)：项目留言入口和回复关系局限。
+   - [小红书](references/xiaohongshu.md)：专用浏览器登录、关键词或笔记链接、可见评论与楼中楼；当前为未实测开发分支。
 4. 生成命令并先加 `--dry-run` 验证输入。该命令不联网、不建库，也不验证平台是否可访问。运行目录与技能安装目录分开。
 5. 真实采集在用户已明确授权的平台、目标和用途内执行；保留已有授权，不重复询问。只有目标、范围不明或需新的账户操作时补问。扫码、密码和账户确认由用户在平台窗口完成，勿索取其密码或把密钥放进聊天。
 

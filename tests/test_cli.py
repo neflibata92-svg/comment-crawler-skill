@@ -12,6 +12,26 @@ from comment_crawler.core.utils import CollectionResult
 
 
 class CliTests(unittest.TestCase):
+    def test_xiaohongshu_query_and_target_dry_run_require_profile(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(['collect', 'xiaohongshu', '--query', '相机', '--profile', tmp,
+                                   '--output', str(Path(tmp) / 'query'), '--dry-run']), 0)
+            self.assertEqual(main(['collect', 'xiaohongshu', '--target',
+                                   'https://www.xiaohongshu.com/explore/0123456789abcdef01234567?xsec_token=secret',
+                                   '--profile', tmp, '--output', str(Path(tmp) / 'note'), '--dry-run']), 0)
+            self.assertFalse((Path(tmp) / 'query').exists())
+            self.assertEqual(main(['collect', 'xiaohongshu', '--query', '相机',
+                                   '--output', str(Path(tmp) / 'missing'), '--dry-run']), 1)
+
+    def test_xiaohongshu_task_manifest_does_not_store_signed_token(self):
+        def collect(source, config, output, emit):
+            return CollectionResult(source)
+        with tempfile.TemporaryDirectory() as tmp, patch('comment_crawler.cli.dispatch', collect), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(['collect', 'xiaohongshu', '--target',
+                                   'https://www.xiaohongshu.com/explore/0123456789abcdef01234567?xsec_token=secret',
+                                   '--profile', tmp, '--output', str(Path(tmp) / 'note')]), 0)
+            self.assertNotIn('secret', (Path(tmp) / 'note' / 'task.json').read_text())
+
     def test_dry_run_does_not_create_output_or_require_credentials(self):
         with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
             out = Path(tmp) / 'out'

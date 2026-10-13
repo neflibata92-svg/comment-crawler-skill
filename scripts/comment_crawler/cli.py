@@ -13,7 +13,7 @@ from .core.schema import utc_now
 from .core.storage import ReviewStore
 from .core.utils import CollectionResult, load_json
 
-SOURCES = ('youtube', 'reddit', 'reddit_opencli', 'taobao', 'jd', 'kickstarter')
+SOURCES = ('youtube', 'reddit', 'reddit_opencli', 'taobao', 'jd', 'kickstarter', 'xiaohongshu')
 
 
 def dispatch(source, config, output, emit):
@@ -27,6 +27,9 @@ def dispatch(source, config, output, emit):
     if source == 'reddit_opencli':
         from .collectors.reddit_opencli import OpenCLIRedditCollector
         return OpenCLIRedditCollector(config, crawl, emit=emit).collect()
+    if source == 'xiaohongshu':
+        from .collectors.xiaohongshu import collect_xiaohongshu
+        return collect_xiaohongshu(config, crawl['delay_seconds'], emit)
     from .collectors.browser import browser_collect
     return browser_collect(source, config['target'], config.get('profile'), crawl['delay_seconds'], emit)
 
@@ -36,14 +39,14 @@ def parser():
     sub = root.add_subparsers(dest='command', required=True)
     sub.add_parser('doctor', help='离线检查依赖和凭据是否存在，不显示密钥')
     login = sub.add_parser('login', help='打开浏览器供用户自行登录')
-    login.add_argument('source', choices=('taobao', 'jd'))
+    login.add_argument('source', choices=('taobao', 'jd', 'xiaohongshu'))
     login.add_argument('--profile', required=True)
     collect = sub.add_parser('collect', help='运行单一平台／后端')
     collect.add_argument('source', choices=SOURCES)
     collect.add_argument('--config', help='JSON 配置，可含平台同名节')
     collect.add_argument('--query', action='append', help='可重复传入关键词')
     collect.add_argument('--subreddit', action='append')
-    collect.add_argument('--target', help='商品／项目 URL；京东也接受数字 ID')
+    collect.add_argument('--target', help='商品／项目／小红书笔记 URL；京东也接受数字 ID')
     collect.add_argument('--profile', help='用户专用的本地浏览器档案目录')
     collect.add_argument('--output', required=True, help='任务输出目录；恢复时用相同目录')
     collect.add_argument('--delay', type=float, help='请求间隔秒数，必须大于 0')
@@ -74,6 +77,14 @@ def resolve_config(args):
     if args.source in ('youtube', 'reddit', 'reddit_opencli'):
         if not config.get('queries'):
             raise ValueError('请提供 --query 或配置 queries')
+    elif args.source == 'xiaohongshu':
+        from .collectors.xiaohongshu import validate_note_url
+        if not config.get('queries') and not config.get('target'):
+            raise ValueError('小红书需要 --query 或 --target')
+        if config.get('target'):
+            config['target'] = validate_note_url(str(config['target']))
+        if not config.get('profile'):
+            raise ValueError('小红书需要 --profile 指向自己的专用浏览器目录')
     else:
         from .collectors.browser import validate_target
         config['target'] = validate_target(args.source, str(config.get('target', '')))
@@ -103,8 +114,12 @@ def run_collect(args):
     output.mkdir(parents=True, exist_ok=True)
     # 任务目录只对应一个来源，双后端请分目录，防止下游统计误合并。
     manifest = output / 'task.json'
+    target_identity = config.get('target', '')
+    if args.source == 'xiaohongshu' and target_identity:
+        from .collectors.xiaohongshu import canonical_note_url
+        target_identity = canonical_note_url(target_identity)
     identity = {'source': args.source, 'queries': config.get('queries', []),
-                'subreddits': config.get('subreddits', []), 'target': config.get('target', '')}
+                'subreddits': config.get('subreddits', []), 'target': target_identity}
     if manifest.exists() and json.loads(manifest.read_text()) != identity:
         raise ValueError('输出目录属于不同任务；请使用新目录，或以原目标恢复')
     if not manifest.exists() and (output / 'records.sqlite3').exists():
@@ -157,8 +172,12 @@ def main(argv=None):
         if args.command == 'doctor':
             return doctor()
         if args.command == 'login':
-            from .collectors.browser import login
-            login(args.source, args.profile)
+            if args.source == 'xiaohongshu':
+                from .collectors.xiaohongshu import login_xiaohongshu
+                login_xiaohongshu(args.profile)
+            else:
+                from .collectors.browser import login
+                login(args.source, args.profile)
             return 0
         if args.command == 'collect':
             return run_collect(args)
