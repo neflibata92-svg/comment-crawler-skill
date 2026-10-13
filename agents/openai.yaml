@@ -1,0 +1,6 @@
+interface:
+  display_name: "多平台评论采集"
+  short_description: "采集多平台评论，按来源选择后端，支持增量保存、更新与完整度检查"
+  default_prompt: "使用 $comment-crawler 为指定产品选择评论采集方式，检查环境并执行已授权的任务。"
+policy:
+  allow_implicit_invocation: true
