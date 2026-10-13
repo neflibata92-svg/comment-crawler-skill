@@ -30,6 +30,16 @@ def canonical_note_url(url: str) -> str:
     return f'https://www.xiaohongshu.com/explore/{note_id_from_url(url)}'
 
 
+def page_note_id(page) -> str | None:
+    """读取当前页面地址路径中的笔记 ID；不是笔记页（如 /404 拦截页）时返回 None。
+
+    被平台拦截时笔记 ID 只出现在被 URL 编码的查询参数里，路径本身是 /404，
+    因此只看路径即可区分「真的打开了这篇笔记」和「被重定向到拦截页」。
+    """
+    match = NOTE_PATH.fullmatch(urlparse(page.url).path)
+    return match.group(1).lower() if match else None
+
+
 def search_url(query: str) -> str:
     """关键词直接拼成 AI 搜索结果页地址。
 
@@ -62,7 +72,7 @@ SEARCH_ROWS_JS = r'''() => { // SEARCH_ROWS
   const sections = document.querySelectorAll('section.note-item, section:has(a[href*="/search_result/"]), section:has(a[href*="/explore/"])');
   for (const section of sections) {
     if (section.classList.contains('query-note-item')) continue;
-    const link = section.querySelector('a[href*="/search_result/"], a[href*="/explore/"]');
+    const link = section.querySelector('a[href*="/search_result/"]') || section.querySelector('a[href*="/explore/"]');
     if (!link) continue;
     const url = new URL(link.getAttribute('href'), location.href);
     if (url.hostname !== 'www.xiaohongshu.com' && url.hostname !== 'xiaohongshu.com') continue;
@@ -242,9 +252,25 @@ def collect_xiaohongshu(config: dict, delay: float, emit=None) -> CollectionResu
                     entry = notes.setdefault(key, {**note, 'queries': []})
                     if query not in entry['queries']:
                         entry['queries'].append(query)
+            blocked = 0
+            opened = 0
             for note in notes.values():
                 _open(page, note['url'])
+                if page_note_id(page) != note_id_from_url(note['url']):
+                    # 平台把当前地址重定向到 /404 等拦截页；跳过该笔记，不采拦截页内容。
+                    blocked += 1
+                    result.warnings.append(f'{canonical_note_url(note["url"])} 未能打开（平台拦截或令牌失效）；跳过')
+                    if blocked >= 3:
+                        result.status = 'backend_limited'
+                        result.warnings.append('连续多篇笔记被拦截；停止采集，报告原因而不继续硬试')
+                        break
+                    continue
+                blocked = 0
+                opened += 1
                 collect_note_comments(page, note['url'], result, delay, queries=note.get('queries'))
+            if notes and opened == 0 and result.status not in ('backend_limited', 'failed'):
+                result.status = 'backend_limited'
+                result.warnings.append('所有笔记都未能打开；本次没有可交付的评论数据')
             result.warnings.append(f'本次发现或指定 {len(notes)} 篇笔记；仅覆盖页面可见搜索结果和评论')
         except Exception as exc:
             # Playwright 异常可能携带 xsec_token；只保留异常类型。

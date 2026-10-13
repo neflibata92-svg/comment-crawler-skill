@@ -1,13 +1,27 @@
 import unittest
 
 from comment_crawler.collectors.xiaohongshu import (
-    check_access, collect_note_comments, discover_notes, note_id_from_url, search_url,
-    validate_note_url, xhs_record,
+    check_access, collect_note_comments, discover_notes, note_id_from_url, page_note_id,
+    search_url, validate_note_url, xhs_record,
 )
 from comment_crawler.core.utils import CollectionResult
 
 
 class XiaohongshuTests(unittest.TestCase):
+    def test_page_note_id_reads_only_real_note_paths(self):
+        # 被平台拦截时地址是 /404，笔记 ID 只出现在被编码的查询参数里；
+        # 此时必须返回 None，防止把拦截页当成笔记页继续采。
+        class Page:
+            def __init__(self, url):
+                self.url = url
+        note = '0123456789abcdef01234567'
+        self.assertEqual(page_note_id(Page(f'https://www.xiaohongshu.com/explore/{note}?xsec_token=secret')), note)
+        self.assertEqual(page_note_id(Page(f'https://www.xiaohongshu.com/search_result/{note}')), note)
+        blocked = ('https://www.xiaohongshu.com/404?source=/404/sec_x'
+                   '&redirectPath=https%3A%2F%2Fwww.xiaohongshu.com%2Fexplore%2F' + note)
+        self.assertIsNone(page_note_id(Page(blocked)))
+        self.assertIsNone(page_note_id(Page('https://www.xiaohongshu.com/explore')))
+
     def test_search_url_builds_encoded_result_page(self):
         # 当前页面上的搜索框组件隐藏（宽高为 0），采集器改为直接打开结果页地址。
         self.assertEqual(search_url('memomind'),
