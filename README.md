@@ -26,6 +26,12 @@ python -m pip install '.[browser]'
 python -m playwright install chromium
 ```
 
+若要输出多工作表分析工作簿，可选安装本地分析依赖：
+
+```bash
+python -m pip install '.[analysis]'
+```
+
 OpenCLI 由用户单独安装并连接浏览器扩展；工具不会安装扩展、接管日常浏览器档案或获取账户密码。适配依据为发布时本机 OpenCLI `reddit search/read` 命令；版本差异见 [Reddit](references/reddit.md)。
 
 ## 安装为 Skill
@@ -33,6 +39,8 @@ OpenCLI 由用户单独安装并连接浏览器扩展；工具不会安装扩展
 把完整仓库目录复制或克隆到 Codex 的个人技能目录，并将目录命名为 `comment-crawler`（例如 `~/.codex/skills/comment-crawler`）。已有同名目录时先检查，勿覆盖。保留 `scripts/`、`references/`、`agents/` 和根目录文件；只复制 `SKILL.md` 不可执行。
 
 重新加载技能后，以 `$comment-crawler` 调用。其他兼容 Agent Skills 的工具可将本目录安装到其技能目录。Skill 无需独立 Agent 服务。
+
+仓库还提供独立的评论分析 skill，位于 `comment-quant-analysis/`。如需直接使用 `$comment-quant-analysis`，将该子目录单独安装为 `~/.codex/skills/comment-quant-analysis`；也可以只安装主 skill，并在 `$comment-crawler` 任务中按需读取其配套分析 skill。两个 skill 可分别更新。
 
 也可不安装命令行包，直接执行 `python /技能目录/scripts/crawl.py doctor`。采集数据写到单独任务目录，不写入技能安装目录。
 
@@ -113,6 +121,36 @@ Ctrl+C 会保留已提交记录。小红书按笔记写入检查点；搜索结�
 | `interrupted` / 130 | 用户中断；可重新扫描恢复 |
 
 [字段、去重与验收说明](references/data-and-quality.md)。作者标识使用来源隔离的哈希，这是去标识化而非不可逆匿名保证；正文仍可能包含个人信息。数据与账号档案只保留在任务所需的本地位置。
+
+## 分析已有采集结果
+
+安装配套分析 skill 后，可用 `$comment-quant-analysis` 对用户明确指定的任务数据做清洗、去重、痛点量化和证据整理。完整的分类、分母、严重程度和报告口径见 [`comment-quant-analysis/references/analysis-methodology.md`](comment-quant-analysis/references/analysis-methodology.md)；仓库记录字段的映射与限制见 [`comment-quant-analysis/references/crawler-data-map.md`](comment-quant-analysis/references/crawler-data-map.md)。
+
+也可直接运行仓库 CLI 的本地分析器，无需重新采集或联网：
+
+```bash
+comment-crawler analyze \
+  --input ./runs/xhs-memomind-test \
+  --output ./runs/xhs-memomind-analysis \
+  --product 'Memomind'
+```
+
+`--input` 支持任务目录、SQLite、CSV 或 JSONL；合并渠道时可重复指定。一个任务目录同时有 SQLite/CSV/JSONL 时只读 SQLite，不把导出文件重复计数；也会拒绝在同一命令中重复选入同一任务的多种格式。输出目录须为空且位于任务目录之外。必需输出包括清洗明细、量化摘要、Markdown 报告、痛点和机会表、完整 `evidence_index.csv` 及人工复核队列；安装 `.[analysis]` 后另有 XLSX。
+
+`--product` 和 `--brand` 只记录分析目标，不会覆盖记录里的产品/品牌字段，也不会自动筛掉其他产品评论。首轮默认 `--scope all` 是探索性规则预标注；不要把它当作目标产品的正式结论。生成首轮结果后，逐条编辑 `cleaned_comments.csv`，保留 `analysis_record_key`，设置 `annotation_status=manual_reviewed`、`product_relevance=related/unrelated/uncertain`，必要时修正未知的 `content_group`，并复核主题、痛点、购买障碍和严重程度。再用相同原始输入及人工标注文件运行目标范围报告：
+
+```bash
+comment-crawler analyze \
+  --input ./runs/xhs-memomind-test \
+  --output ./runs/xhs-memomind-verified-analysis \
+  --product 'Memomind' \
+  --annotations ./runs/xhs-memomind-analysis/cleaned_comments.csv \
+  --scope verified-target
+```
+
+`verified-target` 只统计人工确认与目标产品相关、且纳入分析的评论。评论意向“想买”不会自动计为购买障碍；严重度只汇总人工评估的 1–5 分。完整标签证据索引保存在 `evidence_index.csv`。规则预标注不能稳定识别反讽、上下文指代和隐含需求；单人复核也不等于标注者间信度。
+
+一个任务目录中的 `records.sqlite3`、`records.csv`、`records.jsonl` 是同一批数据的不同格式，分析时只选一种作为记录输入，优先使用 SQLite 主库。`task.json` 和 `last_run.json` 用来说明采集来源、状态和覆盖限制，不是评论记录；不同任务目录或不同 Reddit 后端也不要默认合并。评论分析只基于用户指定文件，不自动联网补充或启动新的采集任务。
 
 ## 开发验证
 

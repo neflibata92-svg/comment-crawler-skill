@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import importlib.util
 import json
 import os
@@ -56,6 +57,17 @@ def parser():
     for name in ('export', 'check'):
         command = sub.add_parser(name)
         command.add_argument('--output', required=True)
+    analyze = sub.add_parser('analyze', help='清洗并量化分析已有的评论文件；不联网、不修改输入')
+    analyze.add_argument('--input', '-i', action='append', required=True,
+                         help='SQLite、CSV、JSONL 文件或含 records.* 的任务目录；可重复指定不同来源')
+    analyze.add_argument('--output', '-o', required=True, help='新的空分析结果目录')
+    analyze.add_argument('--product', default='', help='分析目标产品／品类；不覆盖记录中的产品字段，也不自动过滤评论')
+    analyze.add_argument('--brand', default='', help='分析目标品牌；不覆盖记录中的产品字段，也不自动过滤评论')
+    analyze.add_argument('--near-duplicate-threshold', type=float, default=0.9,
+                         help='近似重复聚类的字符三元组 Jaccard 阈值（0.5–1，默认 0.9）')
+    analyze.add_argument('--annotations', help='人工复核 CSV；可编辑此前输出的 cleaned_comments.csv 后传入')
+    analyze.add_argument('--scope', choices=('all', 'verified-target'), default='all',
+                         help='all 为全体有效评论探索；verified-target 仅统计人工确认相关的评论')
     return root
 
 
@@ -206,6 +218,14 @@ def main(argv=None):
             return 0
         if args.command == 'collect':
             return run_collect(args)
+        if args.command == 'analyze':
+            from .analysis import run_analysis
+            result = run_analysis(args.input, args.output, args.product, args.brand,
+                                  args.near_duplicate_threshold, args.annotations, args.scope)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            if not result['workbook_created']:
+                print("未生成 XLSX；如需工作簿，请安装分析依赖：python -m pip install '.[analysis]'", file=sys.stderr)
+            return 0
         output = Path(args.output).expanduser().resolve()
         if not (output / 'records.sqlite3').is_file():
             raise ValueError('输出目录不存在 records.sqlite3')
@@ -226,11 +246,14 @@ def main(argv=None):
                 'last_run': last_run,
             }, ensure_ascii=False))
         return 0
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, csv.Error) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     except ImportError:
-        print('缺少浏览器依赖：安装本包的 browser extra，并执行 playwright install chromium', file=sys.stderr)
+        if args.command == 'analyze':
+            print('评论分析模块加载失败；请检查当前安装包文件是否完整', file=sys.stderr)
+        else:
+            print('缺少浏览器依赖：安装本包的 browser extra，并执行 playwright install chromium', file=sys.stderr)
         return 1
 
 

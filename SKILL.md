@@ -41,6 +41,16 @@ license: MIT
 - `failed`：失败，退出码 1；`interrupted`：用户中断，退出码 130。
 - 原作者确认历史脚本曾采集成功；此包的真实平台复测状态见 README，不能用离线通过替代实测结论。
 
+## 分析已有采集结果
+
+- 用户只要求分析已保存的评论时，不运行 `collect`；改用配套的 [评论量化分析 skill](comment-quant-analysis/SKILL.md)，并按其方法参考执行。
+- 本仓库 CLI 已提供 `analyze` 子命令。仅当用户明确指定采集任务或文件后，才运行 `python /技能根目录/scripts/crawl.py analyze --input /用户指定的任务目录 --output /新的分析目录`；`--product`、`--brand` 只登记分析目标，不会覆盖记录里的品牌，也不会自动筛选相关评论。命令离线只读输入，并要求输出目录为空。
+- 首轮默认 `--scope all` 仅用于探索性规则预标注。需要对目标产品出正式量化报告时，应逐条复核 `cleaned_comments.csv` 中的有效性、`product_relevance` 和标签，标记 `annotation_status=manual_reviewed`，然后以 `--annotations` 和 `--scope verified-target` 重新分析；最终 N 只包括人工确认相关且纳入的评论。
+- 严重程度仅汇总人工标注分值，购买意向不自动判为购买障碍。报告正文引用受长度限制时，使用 `evidence_index.csv` 查全量证据。
+- 输入是本仓库采集结果时，还要读取 `comment-quant-analysis/references/crawler-data-map.md`，正确区分 `external_id`、合成 ID、`content_type`、`parent_id`、`author_hash` 和运行报告。
+- 用户明确要求“采集并分析”时，先按本 skill 完成已授权采集，再只分析用户指定的任务目录。SQLite、CSV、JSONL 是同一批记录的不同表示，不得重复合并计数；不同任务和后端默认分开。
+- 采集、检查或导出本身不等于评论量化分析；用户未要求分析时，不自动生成主题或产品结论。
+
 ## 示例
 
 用户授权采集某相机产品 YouTube 评论，API Key 已在本机环境设置：
