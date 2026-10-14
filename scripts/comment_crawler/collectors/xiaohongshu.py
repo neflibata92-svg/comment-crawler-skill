@@ -5,14 +5,37 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
+from typing import Any
 from urllib.parse import quote, urlparse
 
 from ..core.schema import ReviewRecord, clean_text, hash_author, stable_hash, utc_now
 from ..core.utils import CollectionResult, validate_browser_profile_path
+from ..media_ocr import IMAGE_SUFFIXES, process_media_assets
 
 
 NOTE_PATH = re.compile(r'^/(?:explore|search_result)/([0-9a-fA-F]{24})/?$')
 HOME = 'https://www.xiaohongshu.com/explore'
+
+
+def _needs_media_download(note_id: str, record: ReviewRecord, output_dir: str | Path) -> bool:
+    assets = record.metadata.get('media_assets') if isinstance(record.metadata.get('media_assets'), dict) else {}
+    media_dir = Path(output_dir) / '.mediacrawler' / 'xhs' / 'media' / note_id
+    if media_dir.is_dir() and any(
+            path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES for path in media_dir.rglob('*')):
+        return True
+    video_paths = assets.get('files', [])
+    if not isinstance(video_paths, list):
+        video_paths = []
+    if any(not (Path(output_dir) / str(path)).is_file() for path in video_paths if path):
+        return True
+    video_analysis = assets.get('video_analysis') if isinstance(assets.get('video_analysis'), dict) else {}
+    video_processed = record.metadata.get('video_present') and video_analysis.get('status') == 'completed'
+    if record.metadata.get('video_present') and not video_processed:
+        return True
+    return (
+        (not assets.get('download_requested') and not video_processed)
+        or assets.get('image_ocr_status') in {None, 'unavailable', 'partial'}
+    )
 
 
 def validate_note_url(url: str) -> str:
@@ -138,6 +161,7 @@ def xhs_record(raw: dict, url: str) -> ReviewRecord:
     metadata = {'likes': clean_text(raw.get('likes')),
                 'queries': list(raw.get('queries') or []),
                 'id_kind': 'platform' if native_id else 'synthetic',
+                'comment_level': 2 if parent_id else 1,
                 'coverage': 'visible_dom',
                 'published_at_raw': published_raw,
                 'published_at_precision': time_precision}
@@ -168,8 +192,14 @@ def xhs_post_record(raw: dict, url: str) -> ReviewRecord:
         published_at=published, captured_at=captured_at,
         metadata={'queries': list(raw.get('queries') or []),
                   'visible_engagement': visible_engagement,
+                  'video_present': bool(raw.get('video_present')),
                   'id_kind': 'platform',
                   'coverage': 'visible_dom',
+                  'media_assets': {
+                      'status': 'not_downloaded_by_native_adapter',
+                      'download_requested': False,
+                      'files': [],
+                  },
                   'published_at_raw': published_raw,
                   'published_at_precision': time_precision}).normalize()
 
@@ -214,7 +244,8 @@ NOTE_DETAILS_JS = r'''() => { // NOTE_DETAILS
     likes: count('.like-wrapper .count'),
     saves: count('.collect-wrapper .count'),
     comments: count('.chat-wrapper .count, .comment-wrapper .count'),
-    shares: count('.share-wrapper .count')
+    shares: count('.share-wrapper .count'),
+    video_present: !!noteRoot.querySelector('video')
   };
 }'''
 
@@ -451,11 +482,12 @@ def collect_xiaohongshu(config: dict, delay: float, emit=None) -> CollectionResu
     progress = XhsProgress(Path(output_dir) / 'progress.json', task,
                            config.get('existing_post_ids', [])) if output_dir else None
     profile = validate_browser_profile_path(config['profile'])
+    notes: dict[str, dict] = {}
+    post_records: dict[str, ReviewRecord] = {}
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(profile, headless=False)
         try:
             page = context.new_page()
-            notes: dict[str, dict] = {}
             if target:
                 key = note_id_from_url(target)
                 notes[key] = {'url': target, 'title': '', 'queries': []}
@@ -490,6 +522,10 @@ def collect_xiaohongshu(config: dict, delay: float, emit=None) -> CollectionResu
                     for query in saved.get('queries', []):
                         if query not in entry['queries']:
                             entry['queries'].append(query)
+            for note_id in notes:
+                previous = config.get('existing_post_records', {}).get(note_id)
+                if isinstance(previous, ReviewRecord):
+                    post_records[note_id] = previous
             blocked = 0
             opened = 0
             attempted = 0
@@ -549,7 +585,13 @@ def collect_xiaohongshu(config: dict, delay: float, emit=None) -> CollectionResu
                 post_data = {**post_data,
                              'title': clean_text(post_data.get('title') or note.get('title')),
                              'queries': note.get('queries', [])}
-                result.add(xhs_post_record(post_data, note['url']))
+                post_record = xhs_post_record(post_data, note['url'])
+                previous = post_records.get(note_id)
+                if previous:
+                    post_record.metadata['media_assets'] = previous.metadata.get(
+                        'media_assets', post_record.metadata['media_assets'])
+                result.add(post_record)
+                post_records[note_id] = post_record
                 if not post_data.get('body'):
                     result.warnings.append(f'{canonical_note_url(note["url"])} 未读取到笔记正文；已保存可获得的字段')
                 comments_complete = collect_note_comments(page, note['url'], result, delay, queries=note.get('queries'))
@@ -574,6 +616,100 @@ def collect_xiaohongshu(config: dict, delay: float, emit=None) -> CollectionResu
             result.status = 'failed'
         finally:
             context.close()
+
+    if config.get('mediacrawler_home') and result.status not in {'backend_limited', 'failed', 'interrupted'}:
+        media_run: dict[str, Any] = {
+            'status': 'already_complete', 'download_requested': False, 'return_code': None,
+        }
+        media_targets = [
+            note_id for note_id in notes
+            if note_id in post_records and _needs_media_download(note_id, post_records[note_id], output_dir)
+        ]
+        if media_targets:
+            try:
+                from .mediacrawler import download_media_for_posts
+                media_run = download_media_for_posts(
+                    'xiaohongshu', config['mediacrawler_home'], media_targets, output_dir, delay,
+                    profile_directory=profile,
+                )
+            except Exception as exc:
+                media_run = {
+                    'status': f'media_download_failed:{type(exc).__name__}',
+                    'download_requested': False, 'return_code': None,
+                }
+
+        data_root = Path(output_dir) / '.mediacrawler'
+        from ..web_video_analysis import WebVideoSession
+        with WebVideoSession(profile) as web_video_session:
+            for note_id in media_targets:
+                post_record = post_records[note_id]
+                assets = process_media_assets(
+                    data_root / 'xhs' / 'media' / note_id, data_root, f'xhs:{note_id}',
+                    download_requested=bool(media_run.get('download_requested')),
+                    request_status=str(media_run.get('status', 'not_downloaded')),
+                    video_url=post_record.url,
+                    web_video_session=web_video_session,
+                    profile_directory=profile,
+                )
+                assets['download_status'] = media_run.get('status', 'not_downloaded')
+                post_record.metadata['media_assets'] = assets
+                if emit:
+                    emit(post_record)
+                else:
+                    for index, saved in enumerate(result.records):
+                        if saved.record_key == post_record.record_key:
+                            result.records[index] = post_record
+                            break
+                if assets['image_ocr_status'] in {'unavailable', 'partial'}:
+                    result.warnings.append(
+                        f'笔记 {note_id} 的图片 OCR 未全部完成；未成功提取的图片已保留，安装本机 OCR 依赖后可重试'
+                    )
+                if assets['video_analysis']['status'] in {'unavailable', 'partial'}:
+                    if assets['video_analysis'].get('mode') == 'web_page':
+                        message = '网页播放取帧 OCR 未完成，检查 Playwright、登录状态、播放器和 OCR 依赖后可重试'
+                    else:
+                        message = '视频帧 OCR 未完成，源视频已保留，检查 FFmpeg、Tesseract 和 OCR 语言数据后可重试'
+                    result.warnings.append(f'笔记 {note_id}：{message}')
+        if media_run.get('status') not in {'completed', 'already_complete'}:
+            result.warnings.append(f"小红书媒体下载状态：{media_run.get('status')}")
+    elif config.get('mediacrawler_home'):
+        result.warnings.append('小红书采集遇到访问或运行限制；遵循停止状态，跳过媒体下载')
+    else:
+        web_targets = [
+            note_id for note_id, record in post_records.items()
+            if record.metadata.get('video_present')
+            and (record.metadata.get('media_assets') or {}).get('video_analysis', {}).get('status') != 'completed'
+        ]
+        if web_targets:
+            data_root = Path(output_dir) / '.mediacrawler'
+            from ..web_video_analysis import WebVideoSession
+            with WebVideoSession(profile) as web_video_session:
+                for note_id in web_targets:
+                    post_record = post_records[note_id]
+                    assets = process_media_assets(
+                        data_root / 'xhs' / 'media' / note_id, data_root, f'xhs:{note_id}',
+                        download_requested=False,
+                        request_status='web_fallback_without_media_downloader',
+                        video_url=post_record.url,
+                        web_video_session=web_video_session,
+                        profile_directory=profile,
+                    )
+                    post_record.metadata['media_assets'] = assets
+                    if emit:
+                        emit(post_record)
+                    else:
+                        for index, saved in enumerate(result.records):
+                            if saved.record_key == post_record.record_key:
+                                result.records[index] = post_record
+                                break
+                    if assets['video_analysis']['status'] != 'completed':
+                        result.warnings.append(
+                            f'笔记 {note_id} 网页视频取帧 OCR 未完成；检查浏览器登录、播放器、Playwright 与 OCR 依赖'
+                        )
+        else:
+            result.warnings.append(
+                '未配置 MEDIACRAWLER_HOME；小红书帖子和评论已采集，未找到可由页面确认的视频，也未请求媒体下载'
+            )
     return result
 
 

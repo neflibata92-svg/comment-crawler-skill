@@ -18,6 +18,7 @@
 | `content_type` | `content_type` | 可见 `post`、`video`、`comment` 等类型；按数据实际值识别，不假设只包含评论。 |
 | `external_id` | `comment_id`（评论）或内容 ID（帖子/视频） | 可能是平台 ID，也可能是合成 ID；必须结合 `metadata.id_kind`（如存在）识别，不能称合成 ID 为平台原生 ID。 |
 | `parent_id` | `parent_id` | 对 `comment` 记录，非空表示采集器记录了父关系；空值只表示未提供/未记录，不能证明一定是顶层评论。不要推断完整楼层链。 |
+| `metadata.comment_level` | `content_group` 的层级证据 | 统一口径为一级评论 `1`、回复 `2`；较深回复若来源保留则按 `reply` 汇总。缺失时结合平台父 ID 规则；仍不明确就标记 `unknown`。 |
 | `body` | `text_original`（评论正文） | 采集器会压缩连续空白；这是采集器保存的原文，不等于网页字节级原文。 |
 | `title` | 可选的 `title_original` 或帖子上下文 | 对帖子/视频与评论分开保存；不能把标题拼入评论正文后计数。 |
 | `url` | `source_url` / 证据链接 | 可用于回溯；无法公开访问或 URL 为空时，改用文件位置键。 |
@@ -45,7 +46,8 @@
 - 当前采集器的逻辑记录键为 `source + content_type + external_id + parent_id`。SQLite 另存 `record_key` 和 `content_hash`；CSV/JSONL 通常不导出这两个数据库列。
 - 有 `record_key` 时可用于识别仓库内同一逻辑记录；它不是平台评论 ID。跨导出合并时，不要把相同记录的多种文件格式当作多条评论。
 - 同一个逻辑键在不同快照正文不一致时，保留版本/冲突信息并列入复核；只有分析“最新状态”时才按 `captured_at` 选取代表版本，并说明规则。
-- `content_type == comment` 同时可能包含顶层评论与回复。结合 `parent_id` 分层；父 ID 缺失时标记关系未知，不擅自归类成顶层。
+- 分析表会在逻辑 ID 去重后，按来源、内容类型、帖子/评价、父评论 ID 和逐字相同正文合并精确同文评论；`duplicate_comment_ids_json`、`duplicate_author_ids_json`、`source_locations_json` 与 `duplicate_count` 保留所有可追溯来源。作者数按匿名作者 ID 并集计算。不同来源、帖子或父评论关系不互相合并，标点、大小写不同的近似文本仍独立保留并可聚类。
+- `content_type == comment` 同时可能包含顶层评论与回复。优先读取 `metadata.comment_level`，其次结合 `parent_id` 和来源规则分层；字段与关系都不足时标记 `unknown`，不擅自归类成顶层。
 - `post`、`video` 等记录可作为内容上下文或来源覆盖单位，但不能计入评论 N。评论统计应明确是否包含回复，并分别给出分母。
 - 小红书评论可能使用合成 ID；同一内容被重新采集时，检查 `metadata` 中的 ID 类型和父关系。不要把合成键的不稳定误读成用户新增评论或原生 ID。
 

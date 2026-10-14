@@ -47,7 +47,7 @@ def jd_record(item: dict, url: str) -> ReviewRecord:
     return ReviewRecord('jd', 'comment', url, key, body=body, author_hash=author,
                         published_at=item.get('creationTime', ''), score=item.get('usefulVoteCount'), rating=item.get('score'),
                         metadata={'sku': sku, 'append': append, 'images': len(item.get('images') or []),
-                                  'id_kind': 'platform' if native_id else 'synthetic'}).normalize()
+                                  'id_kind': 'platform' if native_id else 'synthetic', 'comment_level': 1}).normalize()
 
 
 def taobao_record(raw: dict, url: str) -> ReviewRecord:
@@ -60,7 +60,7 @@ def taobao_record(raw: dict, url: str) -> ReviewRecord:
                         published_at=date.group(0) if date else '',
                         metadata={'product_meta': meta, 'append': clean_text(raw.get('append')),
                                   'likes': clean_text(raw.get('likes')), 'images': raw.get('imgs', 0),
-                                  'id_kind': 'synthetic', 'coverage': 'visible_dom'}).normalize()
+                                  'id_kind': 'synthetic', 'coverage': 'visible_dom', 'comment_level': 1}).normalize()
 
 
 def kickstarter_record(item: dict, url: str) -> ReviewRecord:
@@ -72,6 +72,7 @@ def kickstarter_record(item: dict, url: str) -> ReviewRecord:
                         author_hash=hash_author('kickstarter', (item.get('author') or {}).get('id') or (item.get('author') or {}).get('name')),
                         published_at=item.get('created_at', ''),
                         metadata={'reply_relationship': 'provided' if parent else 'not_provided',
+                                  'comment_level': 2 if parent else 1,
                                   'coverage': 'returned_comments_only'}).normalize()
 
 

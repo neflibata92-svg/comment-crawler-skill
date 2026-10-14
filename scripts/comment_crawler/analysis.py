@@ -23,7 +23,8 @@ MAX_NEAR_COMPARISONS = 500_000
 OUTPUT_FIELDS = [
     "source", "content_type", "content_group", "comment_id", "parent_id", "published_at", "captured_at", "title_original",
     "text_original", "is_included", "exclusion_reason", "duplicate_group_id", "duplicate_type",
-    "duplicate_count", "product_or_brand", "product_relevance", "annotation_status", "comment_intent", "experience_status", "topics", "pain_points",
+    "duplicate_count", "duplicate_comment_ids_json", "duplicate_author_ids_json", "duplicate_author_missing_count",
+    "product_or_brand", "product_relevance", "annotation_status", "comment_intent", "experience_status", "topics", "pain_points",
     "user_scenario", "purchase_barrier", "sentiment", "severity_by_pain_point", "evidence_type", "confidence",
     "evidence_note", "analysis_record_key", "anonymous_author_id", "source_url", "source_file", "source_row",
     "source_locations_json", "source_fields_json", "content_completeness", "id_kind", "score", "rating",
@@ -132,6 +133,33 @@ def _stable(value: str, length: int = 24) -> str:
 def _normalized(value: str) -> str:
     value = unicodedata.normalize("NFKC", value).casefold()
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _json_string_list(value: Any) -> list[str]:
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, json.JSONDecodeError):
+        parsed = []
+    if not isinstance(parsed, list):
+        return []
+    return list(dict.fromkeys(_text(item) for item in parsed if _text(item)))
+
+
+def _row_comment_ids(row: dict[str, Any]) -> list[str]:
+    return _json_string_list(row.get("duplicate_comment_ids_json")) or ([row["comment_id"]] if row.get("comment_id") else [])
+
+
+def _row_author_ids(row: dict[str, Any]) -> list[str]:
+    return _json_string_list(row.get("duplicate_author_ids_json")) or (
+        [row["anonymous_author_id"]] if row.get("anonymous_author_id") else []
+    )
+
+
+def _row_author_missing_count(row: dict[str, Any]) -> int:
+    try:
+        return max(0, int(row.get("duplicate_author_missing_count", 0)))
+    except (TypeError, ValueError):
+        return int(not row.get("anonymous_author_id"))
 
 
 def _privacy_safe_fields(raw: dict[str, Any]) -> dict[str, Any]:
@@ -271,16 +299,25 @@ def _relation(source: str, content_type: str, parent_id: str, raw: dict[str, Any
         return "review"
     if content_type not in COMMENT_TYPES and content_type != "comment":
         return "unknown"
-    explicit = _text(_first(raw, "is_reply", "reply", "comment_level", "depth")).casefold()
+    explicit = _text(_first(raw, "is_reply", "reply")).casefold()
     if explicit in {"true", "yes", "1", "reply"}:
         return "reply"
     if explicit in {"false", "no", "0", "top_level", "top-level"}:
         return "top_level"
+    depth = _text(_first(raw, "depth")).casefold()
     try:
-        if explicit and float(explicit) > 0:
+        if depth and float(depth) > 0:
             return "reply"
-        if explicit and float(explicit) == 0:
+        if depth and float(depth) == 0:
             return "top_level"
+    except ValueError:
+        pass
+    comment_level = _text(_first(raw, "comment_level")) or _text(metadata.get("comment_level"))
+    try:
+        level = int(comment_level)
+        if level <= 1:
+            return "top_level"
+        return "reply"
     except ValueError:
         pass
     parent = parent_id.casefold()
@@ -290,7 +327,7 @@ def _relation(source: str, content_type: str, parent_id: str, raw: dict[str, Any
         if parent.startswith("t1_") or parent.startswith("opencli_"):
             return "reply"
         return "unknown"
-    if source in {"youtube", "xiaohongshu", "xhs"}:
+    if source in {"youtube", "xiaohongshu", "xhs", "douyin", "bilibili", "weibo", "zhihu", "tieba"}:
         return "reply" if parent else "top_level"
     if source == "kickstarter":
         return "reply" if parent else "unknown"
@@ -337,6 +374,9 @@ def _normalize_record(item: dict[str, Any]) -> dict[str, Any]:
         "duplicate_group_id": "",
         "duplicate_type": "none",
         "duplicate_count": 1,
+        "duplicate_comment_ids_json": json.dumps([comment_id] if comment_id else [], ensure_ascii=False),
+        "duplicate_author_ids_json": json.dumps([author_hash] if author_hash else [], ensure_ascii=False),
+        "duplicate_author_missing_count": int(not bool(author_hash)),
         "product_or_brand": product_or_brand,
         "product_relevance": "unknown",
         "annotation_status": "not_applicable" if content_group == "context" else "rule_prelabel",
@@ -384,7 +424,7 @@ def _dedupe_key(row: dict[str, Any]) -> tuple[str, str]:
     if row["anonymous_author_id"] and row["_norm_text"]:
         values = (prefix, row["comment_id"], row["_norm_text"], row["anonymous_author_id"], row["parent_id"], row["published_at"], row["_target"])
         return "fallback", "|".join(values)
-    # 缺少匿名作者标识时，仅合并来源字段完全相同的重复行，避免把不同用户的同文评论合并。
+    # 身份字段不足时先避免基于模糊条件合并；后续精确文本轮按帖子与父关系补充去重。
     return "raw", row["source_fields_json"]
 
 
@@ -400,7 +440,7 @@ def _deduplicate(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int,
             output.append(group[0])
             continue
         group_id = _stable(f"{method}|{key}")
-        texts = {row["_norm_text"] for row in group}
+        texts = {row["text_original"] for row in group}
         parents = {row["parent_id"] for row in group}
         targets = {row["_target"] for row in group}
         if method in {"id", "synthetic_id"} and (len(texts) > 1 or len(parents) > 1 or len(targets) > 1):
@@ -417,16 +457,44 @@ def _deduplicate(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int,
                 row["duplicate_count"] = len(group)
             output.extend(group)
             continue
-        representative = max(group, key=lambda row: row["captured_at"])
-        representative["duplicate_group_id"] = group_id
-        representative["duplicate_type"] = "exact_id" if method in {"id", "synthetic_id"} else "exact_fallback"
-        representative["duplicate_count"] = len(group)
-        representative["source_locations_json"] = json.dumps(
-            sorted({location for row in group for location in json.loads(row["source_locations_json"])}), ensure_ascii=False
+        representative = _merge_duplicate_rows(
+            group, group_id, "exact_id" if method in {"id", "synthetic_id"} else "exact_fallback"
         )
-        exact_extra += len(group) - 1
+        exact_extra += representative["duplicate_count"] - 1
         output.append(representative)
-    return output, exact_extra, conflicts
+
+    text_groups: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    untouched: list[dict[str, Any]] = []
+    for row in output:
+        if (row["content_type"] in COMMENT_TYPES and row["content_group"] != "context"
+                and row["_target"] and row["text_original"]):
+            text_groups[(row["source"], row["content_type"], row["_target"], row["parent_id"], row["text_original"])].append(row)
+        else:
+            untouched.append(row)
+    for key, group in text_groups.items():
+        if len(group) == 1:
+            untouched.append(group[0])
+            continue
+        group_id = _stable("exact_text|" + "|".join(key))
+        merged = _merge_duplicate_rows(group, group_id, "exact_text")
+        exact_extra += merged["duplicate_count"] - 1
+        untouched.append(merged)
+    return untouched, exact_extra, conflicts
+
+
+def _merge_duplicate_rows(group: list[dict[str, Any]], group_id: str, duplicate_type: str) -> dict[str, Any]:
+    representative = max(group, key=lambda row: row["captured_at"])
+    comment_ids = sorted({comment_id for row in group for comment_id in _row_comment_ids(row)})
+    author_ids = sorted({author_id for row in group for author_id in _row_author_ids(row)})
+    source_locations = sorted({location for row in group for location in _json_string_list(row["source_locations_json"])})
+    representative["duplicate_group_id"] = group_id
+    representative["duplicate_type"] = duplicate_type
+    representative["duplicate_count"] = sum(int(row.get("duplicate_count", 1)) for row in group)
+    representative["duplicate_comment_ids_json"] = json.dumps(comment_ids, ensure_ascii=False)
+    representative["duplicate_author_ids_json"] = json.dumps(author_ids, ensure_ascii=False)
+    representative["duplicate_author_missing_count"] = sum(_row_author_missing_count(row) for row in group)
+    representative["source_locations_json"] = json.dumps(source_locations, ensure_ascii=False)
+    return representative
 
 
 def _contains(text: str, phrases: Iterable[str]) -> list[str]:
@@ -657,10 +725,15 @@ def _near_duplicates(rows: list[dict[str, Any]], threshold: float) -> tuple[int,
 
 
 def _reference(row: dict[str, Any]) -> str:
-    if row["comment_id"]:
-        reference = f"{row['source']}:{row['comment_id']}"
-        return f"{reference} ({row['source_url']})" if row["source_url"] else reference
-    return f"{row['source_file']}#row={row['source_row']}"
+    return "; ".join(_references(row))
+
+
+def _references(row: dict[str, Any]) -> list[str]:
+    comment_ids = _row_comment_ids(row)
+    if comment_ids:
+        return [f"{row['source']}:{comment_id}" + (f" ({row['source_url']})" if row["source_url"] else "")
+                for comment_id in comment_ids]
+    return [f"{row['source_file']}#row={row['source_row']}"]
 
 
 def _severity_level(median: float | None) -> str:
@@ -726,7 +799,7 @@ def _label_metrics(rows: list[dict[str, Any]], field: str, include_severity: boo
                 for label in set(values):
                     mentions[label].append(row)
             for label, matched in mentions.items():
-                authors = {(row["source"], row["anonymous_author_id"]) for row in matched if row["anonymous_author_id"]}
+                authors = {(row["source"], author_id) for row in matched for author_id in _row_author_ids(row)}
                 target_values = {row["_target"] for row in matched if row["_target"]}
                 detail = {
                     "source_scope": source_scope,
@@ -736,10 +809,10 @@ def _label_metrics(rows: list[dict[str, Any]], field: str, include_severity: boo
                     "denominator": denominator,
                     "mention_rate_pct": _percent(len(matched), denominator),
                     "author_count": len(authors) if authors else None,
-                    "author_id_missing_count": sum(not row["anonymous_author_id"] for row in matched),
+                    "author_id_missing_count": sum(_row_author_missing_count(row) for row in matched),
                     "source_coverage_count": len(target_values) if target_values else None,
                     "source_coverage_missing_count": sum(not row["_target"] for row in matched),
-                    "evidence_ids": [_reference(row) for row in matched],
+                    "evidence_ids": [reference for row in matched for reference in _references(row)],
                     "confidence_counts": dict(Counter(row["confidence"] for row in matched)),
                     "manual_confidence_counts": dict(Counter(row["confidence"] for row in matched
                                                               if row["annotation_status"] == "manual_reviewed")),
@@ -796,7 +869,7 @@ def _experience_pain_metrics(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
             scores = [row["severity_by_pain_point"][label] for row in matched
                       if isinstance(row["severity_by_pain_point"].get(label), int)]
             high = sum(score >= 4 for score in scores)
-            authors = {row["anonymous_author_id"] for row in matched if row["anonymous_author_id"]}
+            authors = {author_id for row in matched for author_id in _row_author_ids(row)}
             output.append({
                 "source": source,
                 "content_group": relation,
@@ -811,7 +884,7 @@ def _experience_pain_metrics(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "severity_evaluable_count": len(scores),
                 "high_severity_count": high,
                 "high_severity_rate_pct": _percent(high, len(scores)),
-                "evidence_ids": [_reference(row) for row in matched],
+                "evidence_ids": [reference for row in matched for reference in _references(row)],
                 "manual_reviewed_count": sum(row["annotation_status"] == "manual_reviewed" for row in matched),
                 "rule_prelabel_count": sum(row["annotation_status"] != "manual_reviewed" for row in matched),
             })
@@ -842,8 +915,7 @@ def _coverage_summary(rows: list[dict[str, Any]], raw_count: int, raw_types: Cou
     context_count = sum(row["content_group"] == "context" for row in rows)
     authors: dict[str, set[str]] = defaultdict(set)
     for row in valid:
-        if row["anonymous_author_id"]:
-            authors[row["source"]].add(row["anonymous_author_id"])
+        authors[row["source"]].update(_row_author_ids(row))
     time_ranges = {}
     for source in sorted(source_counts):
         source_rows = [row for row in valid if row["source"] == source]
@@ -1107,7 +1179,7 @@ def _build_report(summary: dict[str, Any], pain_rows: list[dict[str, Any]], topi
     ]), "", "产品机会按评论提及数列出以便筛查，不代表最终优先级；最终排序需结合证据质量、核心任务和产品定位复核，不计算无依据的加权分数。", "", "## 需要人工复核", ""])
     lines.append(_table(["评论 ID/位置", "来源", "内容关系", "把握度", "复核原因", "匿名短摘录"], [
         [_reference(row), row["source"], row["content_group"], row["confidence"], row["review_status"] or row["exclusion_reason"], _quote_preview(row["text_original"])]
-        for row in review_rows[:100]
+        for row in review_rows
     ]))
     lines.extend(["", f"复核队列共 {len(review_rows)} 条；完整清单见 `review_queue.csv`。", "", "## 限制", "",
                   "- 采集结果仅代表提供文件和本地可见记录，不代表平台全量或总体用户比例。",

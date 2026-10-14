@@ -41,16 +41,17 @@
 
 `source, comment_id, parent_id, published_at, captured_at, text_original, is_included, exclusion_reason, duplicate_group_id, duplicate_type, product_or_brand, comment_intent, experience_status, topics, pain_points, user_scenario, purchase_barrier, sentiment, severity_by_pain_point, evidence_type, confidence, evidence_note`
 
-可增加 `source_file, source_row, content_type, post_or_review_id, anonymous_author_id, duplicate_count, review_status` 等追溯或质检字段。没有的字段留空或记为“未知”；不要生成看似真实的平台 ID、作者数、日期或互动数据。多标签字段用稳定、可读的数组格式；每条痛点的严重程度单独关联该痛点。
+可增加 `source_file, source_row, content_type, post_or_review_id, anonymous_author_id, duplicate_count, duplicate_comment_ids_json, duplicate_author_ids_json, review_status` 等追溯或质检字段。没有的字段留空或记为“未知”；不要生成看似真实的平台 ID、作者数、日期或互动数据。多标签字段用稳定、可读的数组格式；每条痛点的严重程度单独关联该痛点。
 
 ### 3. 去重并保留不确定项
 
 1. 有稳定评论 ID 时，以“来源平台 + 评论 ID”识别同一逻辑记录。
-2. 缺少稳定 ID 时，先用规范化文本、已有匿名作者标识、父评论 ID、时间和帖子/评价标识辅助比对。只有能够确认是完全相同的重复记录时才合并。
+2. 再按“来源平台 + 内容类型 + 帖子/评价标识 + 父评论 ID + 完全相同的原文”识别精确文本重复。正文按保留的原始文本逐字比较，不忽略大小写、标点或词序；匿名作者不同不阻止合并。缺少帖子或父关系时，不能跨上下文合并。
 3. 同一 ID 对应不同正文或关键字段冲突时，标记冲突并列入复核，不静默覆盖或任选一条。
 4. 高度相似但不完全相同的记录只聚类标记，不删除。缺字段导致身份不确定时保留记录并标注潜在误合并风险。
-5. 不同用户独立表达同一问题，必须保留为不同评论；这类反复出现是需求覆盖证据。每条评论对同一痛点最多计一次。
-6. 报告原始记录数、精确重复冗余记录数、近似重复簇数量及簇内记录数；解释使用的匹配字段和残余不确定性。
+5. 合并后的行必须保留所有原评论 ID、匿名作者 ID 并集、来源文件/行位置和冗余记录数。提及评论数按合并后不同评论上下文计，独立作者数按匿名作者并集计；不可把评论数、作者数和来源覆盖数混为一项。
+6. 不同帖子或不同父评论关系里的同文内容分别保留；不同来源也不合并。高度相似但正文不完全相同的记录只聚类标记，不删除。每条评论对同一痛点最多计一次。
+7. 报告原始记录数、精确重复冗余记录数、近似重复簇数量及簇内记录数；解释使用的匹配字段和残余不确定性。
 
 ### 4. 标记纳入状态和内容类型
 

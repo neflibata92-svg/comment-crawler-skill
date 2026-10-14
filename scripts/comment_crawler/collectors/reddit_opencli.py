@@ -9,6 +9,8 @@ from typing import Any
 from ..core.schema import ReviewRecord, clean_text, hash_author, stable_hash
 from ..core.utils import CollectionResult, ConfigurationError, RateLimiter
 
+UNBOUNDED_VISIBLE_COUNT = 2**31 - 1
+
 
 class OpenCLIRedditCollector:
     """只使用 OpenCLI 的 ``reddit search`` 和 ``reddit read`` 只读命令。"""
@@ -76,6 +78,13 @@ class OpenCLIRedditCollector:
                 "subreddit": clean_text(post.get("subreddit")),
                 "search_query": query,
                 "post_hint": clean_text(post.get("post_hint")),
+                "media_assets": {
+                    "status": "not_downloaded_by_opencli"
+                    if post.get("is_video") or "video" in clean_text(post.get("post_hint")).lower()
+                    else "not_applicable",
+                    "download_requested": False,
+                    "files": [],
+                },
             },
         ).normalize()
 
@@ -84,13 +93,12 @@ class OpenCLIRedditCollector:
         post_url = clean_text(post.get("url"))
         if not post_id or not post_url:
             return []
-        visible_count = max(500, int(post.get("comments") or 0) + 1)
         comments = self._run_json([
             "read", post_id,
             "--sort", str(self.config.get("comment_sort", "top")),
-            "--limit", str(visible_count),
-            "--depth", str(visible_count),
-            "--replies", str(visible_count),
+            "--limit", str(UNBOUNDED_VISIBLE_COUNT),
+            "--depth", "2",
+            "--replies", str(UNBOUNDED_VISIBLE_COUNT),
             "--max-length", "2147483647",
             "--expand-more", "--expand-rounds", "5",
         ])
@@ -104,6 +112,8 @@ class OpenCLIRedditCollector:
             if not body or body.startswith("[+"):
                 continue
             level = int(comment_type[1:]) if comment_type.startswith("L") and comment_type[1:].isdigit() else 0
+            if level > 1:
+                continue
             parent_id = parent_by_level.get(level - 1, f"t3_{post_id}") if level else f"t3_{post_id}"
             external_id = f"opencli_{post_id}_{index}_{stable_hash(body, 12)}"
             parent_by_level[level] = external_id
@@ -124,7 +134,7 @@ class OpenCLIRedditCollector:
                 metadata={
                     "backend": "opencli",
                     "subreddit": clean_text(post.get("subreddit")),
-                    "comment_level": level,
+                    "comment_level": level + 1,
                     "coverage": "backend_limited",
                     "id_kind": "synthetic_order_dependent",
                 },
@@ -135,15 +145,15 @@ class OpenCLIRedditCollector:
         result = CollectionResult(source="reddit_opencli", emit=self.emit)
         queries = [str(item).strip() for item in self.config.get("queries", []) if str(item).strip()]
         subreddits = [str(item).strip() for item in self.config.get("subreddits", []) if str(item).strip()]
-        # 当前 OpenCLI 不暴露搜索 after 游标；100 是后端单页范围，不是全量。
-        max_per_query = 100
+        # 当前 OpenCLI 不暴露搜索 after 游标；不在请求侧设置有限结果数。
         result.status = "backend_limited"
-        result.warnings.append("OpenCLI 搜索仅一页且评论展开最多 5 轮；完整分页请使用 reddit OAuth 来源。评论 ID 为合成键，排序变化可能产生重复。")
+        result.warnings.append("OpenCLI 搜索单次读取且不暴露分页游标；评论读取无本地数量上限，仅保存一级评论和二级回复。OpenCLI 的‘更多评论’展开最多 5 轮，且结果受页面可见范围限制。需要分页搜索时请使用 reddit OAuth 来源。评论 ID 为合成键，排序变化可能产生重复。")
         seen: set[str] = set()
         posts: list[dict[str, Any]] = []
         for subreddit in subreddits or [""]:
             for query in queries:
-                arguments = ["search", query, "--sort", str(self.config.get("sort", "relevance")), "--limit", str(max_per_query)]
+                arguments = ["search", query, "--sort", str(self.config.get("sort", "relevance")),
+                             "--limit", str(UNBOUNDED_VISIBLE_COUNT)]
                 if subreddit:
                     arguments.extend(["--subreddit", subreddit])
                 try:

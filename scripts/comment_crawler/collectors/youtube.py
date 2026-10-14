@@ -3,9 +3,12 @@ from __future__ import annotations
 
 from typing import Any, Iterator
 from urllib.parse import urlencode
+from pathlib import Path
 
 from ..core.schema import ReviewRecord, clean_text, hash_author
 from ..core.utils import CollectionResult, RateLimiter, required_env, request_json, resolve_proxy
+from ..media_ocr import process_media_assets
+from ..web_video_analysis import WebVideoSession
 
 
 class YouTubeCollector:
@@ -22,10 +25,10 @@ class YouTubeCollector:
 
     def _api(self, endpoint: str, params: dict[str, Any], api_key: str) -> dict[str, Any]:
         request_params = dict(params)
-        request_params["key"] = api_key
         self.rate_limiter.wait()
         payload = request_json(
             f"{self.API_ROOT}/{endpoint}?{urlencode(request_params)}",
+            headers={"x-goog-api-key": api_key},
             timeout=self.timeout_seconds,
             proxy_url=self.proxy_url,
         )
@@ -51,7 +54,15 @@ class YouTubeCollector:
             reply_count=self._as_int(statistics.get("commentCount")),
             language=clean_text(snippet.get("defaultLanguage") or snippet.get("defaultAudioLanguage")),
             is_official=channel_id in self.official_channel_ids,
-            metadata={"channel_id": channel_id, "channel_title": clean_text(snippet.get("channelTitle"))},
+            metadata={
+                "channel_id": channel_id,
+                "channel_title": clean_text(snippet.get("channelTitle")),
+                "media_assets": {
+                    "status": "not_downloaded_by_youtube_data_api",
+                    "download_requested": False,
+                    "files": [],
+                },
+            },
         ).normalize()
 
     def _comment_records(self, item: dict[str, Any], video_url: str, parent_id: str = "") -> Iterator[ReviewRecord]:
@@ -69,7 +80,7 @@ class YouTubeCollector:
             published_at=snippet.get("publishedAt"),
             score=self._as_int(snippet.get("likeCount")),
             reply_count=self._as_int(snippet.get("totalReplyCount")),
-            metadata={"video_url": video_url},
+            metadata={"video_url": video_url, "comment_level": 2 if parent_id else 1},
         ).normalize()
 
     def _pages(self, endpoint: str, params: dict[str, Any], api_key: str) -> Iterator[dict[str, Any]]:
@@ -137,38 +148,57 @@ class YouTubeCollector:
         if search_order not in {"date", "rating", "relevance", "title", "videoCount", "viewCount"}:
             search_order = "relevance"
         queries = [str(query).strip() for query in self.config.get("queries", []) if str(query).strip()]
-        for query in queries:
-            try:
-                for search in self._pages("search", {
-                    "part": "snippet", "q": query, "type": "video",
-                    "maxResults": 50, "order": search_order,
-                }, api_key):
-                    ids = []
-                    for item in search["items"]:
-                        video_id = clean_text((item.get("id") or {}).get("videoId"))
-                        if video_id and video_id not in seen_video_ids:
-                            ids.append(video_id)
-                            seen_video_ids.add(video_id)
-                    if not ids:
-                        continue
-                    try:
-                        details = self._api("videos", {"part": "snippet,statistics", "id": ",".join(ids)}, api_key)
-                    except Exception as exc:
-                        result.errors.append(f"YouTube 视频详情读取失败 {query}：{type(exc).__name__}")
-                        continue
-                    for item in details.get("items", []):
-                        video_id = clean_text(item.get("id"))
-                        if not video_id:
+        output_dir = Path(self.config.get("output_dir", Path.cwd())).expanduser().resolve()
+        data_root = output_dir / ".mediacrawler"
+        with WebVideoSession(self.config.get("profile")) as web_video_session:
+            for query in queries:
+                try:
+                    for search in self._pages("search", {
+                        "part": "snippet", "q": query, "type": "video",
+                        "maxResults": 50, "order": search_order,
+                    }, api_key):
+                        ids = []
+                        for item in search["items"]:
+                            video_id = clean_text((item.get("id") or {}).get("videoId"))
+                            if video_id and video_id not in seen_video_ids:
+                                ids.append(video_id)
+                                seen_video_ids.add(video_id)
+                        if not ids:
                             continue
-                        result.add(self._video_record(item))
-                        # 已存视频仍刷新评论；单个视频失败不应阻断其余搜索结果。
                         try:
-                            result.extend(self._comments(video_id, api_key))
+                            details = self._api("videos", {"part": "snippet,statistics", "id": ",".join(ids)}, api_key)
                         except Exception as exc:
-                            result.errors.append(f"YouTube 评论读取失败 {video_id}：{type(exc).__name__}")
-            except Exception as exc:
-                result.errors.append(f"YouTube 采集中断 {query}：{type(exc).__name__}: {exc}")
-                continue
+                            result.errors.append(f"YouTube 视频详情读取失败 {query}：{type(exc).__name__}")
+                            continue
+                        for item in details.get("items", []):
+                            video_id = clean_text(item.get("id"))
+                            if not video_id:
+                                continue
+                            video_record = self._video_record(item)
+                            assets = process_media_assets(
+                                data_root / "youtube" / "media" / video_id,
+                                data_root,
+                                f"youtube:{video_id}",
+                                download_requested=False,
+                                request_status="not_downloaded_by_data_api",
+                                video_url=video_record.url,
+                                web_video_session=web_video_session,
+                                profile_directory=self.config.get("profile"),
+                            )
+                            video_record.metadata["media_assets"] = assets
+                            if assets["video_analysis"]["status"] == "unavailable":
+                                result.warnings.append(
+                                    f"YouTube 视频 {video_id} 网页取帧 OCR 未完成；检查浏览器播放状态、Playwright 和 OCR 依赖"
+                                )
+                            result.add(video_record)
+                            # 已存视频仍刷新评论；单个视频失败不应阻断其余搜索结果。
+                            try:
+                                result.extend(self._comments(video_id, api_key))
+                            except Exception as exc:
+                                result.errors.append(f"YouTube 评论读取失败 {video_id}：{type(exc).__name__}")
+                except Exception as exc:
+                    result.errors.append(f"YouTube 采集中断 {query}：{type(exc).__name__}: {exc}")
+                    continue
         return result
 
     @staticmethod

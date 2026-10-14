@@ -65,10 +65,18 @@ class RedditCollector:
             score=self._as_int(post.get("score")),
             reply_count=self._as_int(post.get("num_comments")),
             is_official=author.lower() in self.official_authors,
-            metadata={"subreddit": clean_text(post.get("subreddit")), "permalink": permalink},
+            metadata={
+                "subreddit": clean_text(post.get("subreddit")),
+                "permalink": permalink,
+                "media_assets": {
+                    "status": "not_downloaded_by_reddit_api" if post.get("is_video") else "not_applicable",
+                    "download_requested": False,
+                    "files": [],
+                },
+            },
         ).normalize()
 
-    def _comment_records(self, node: Any, post_url: str) -> Iterator[ReviewRecord]:
+    def _comment_records(self, node: Any, post_url: str, depth: int = 1) -> Iterator[ReviewRecord]:
         if not isinstance(node, dict):
             return
         if node.get("kind") != "t1":
@@ -93,17 +101,19 @@ class RedditCollector:
             score=self._as_int(data.get("score")),
             reply_count=len(reply_children),
             is_official=author.lower() in self.official_authors,
-            metadata={"subreddit": clean_text(data.get("subreddit"))},
+            metadata={"subreddit": clean_text(data.get("subreddit")), "comment_level": depth},
         ).normalize()
         if isinstance(replies, dict):
             for child in reply_children:
-                yield from self._comment_records(child, post_url)
+                yield from self._comment_records(child, post_url, depth + 1)
 
     def _comments(self, post: dict[str, Any], token: str) -> Iterator[ReviewRecord]:
         post_id = clean_text(post.get("id"))
         if not post_id:
             return
-        params = urlencode({"limit": 500, "sort": "new"})
+        # Reddit's public API caps a listing response at 100; MoreComments nodes
+        # below are expanded in successive requests until none remain.
+        params = urlencode({"limit": 100, "sort": "new"})
         payload = self._api(f"/comments/{post_id}.json?{params}", token)
         if not isinstance(payload, list) or len(payload) < 2:
             raise ValueError("评论响应格式异常")
@@ -114,12 +124,17 @@ class RedditCollector:
         pending = list(children)
         requested: set[str] = set()
         seen: set[str] = set()
+        depth_by_comment_id: dict[str, int] = {}
         while pending:
             more_ids: list[str] = []
             while pending:
                 node = pending.pop()
                 data = node.get("data") or {}
                 if node.get("kind") == "more":
+                    parent_id = clean_text(data.get("parent_id"))
+                    parent_depth = 0 if parent_id.startswith("t3_") else depth_by_comment_id.get(parent_id)
+                    if parent_depth is not None and parent_depth >= 2:
+                        continue
                     ids = data.get("children") or []
                     if not ids and data.get("count", 0):
                         raise ValueError("评论展开节点缺少 children，结果不完整")
@@ -131,12 +146,22 @@ class RedditCollector:
                 if node.get("kind") != "t1":
                     continue
                 replies = data.get("replies")
-                if isinstance(replies, dict):
+                parent_id = clean_text(data.get("parent_id"))
+                if parent_id.startswith("t3_"):
+                    depth = 1
+                elif parent_id in depth_by_comment_id:
+                    depth = depth_by_comment_id[parent_id] + 1
+                else:
+                    continue
+                if depth > 2:
+                    continue
+                if isinstance(replies, dict) and depth < 2:
                     pending.extend((replies.get("data") or {}).get("children") or [])
                 # 迭代展开，避免 Python 递归深度成为评论层级上限。
                 flat = {"kind": "t1", "data": {**data, "replies": ""}}
-                for record in self._comment_records(flat, post_url):
+                for record in self._comment_records(flat, post_url, depth):
                     record.reply_count = None  # 展开返回不提供可靠的总回复数
+                    depth_by_comment_id[record.external_id] = depth
                     if record.external_id not in seen:
                         seen.add(record.external_id)
                         yield record

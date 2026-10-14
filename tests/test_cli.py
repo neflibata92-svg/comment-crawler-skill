@@ -5,13 +5,18 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from comment_crawler.cli import main
+from comment_crawler.cli import main, parser
 from comment_crawler.core.schema import ReviewRecord
 from comment_crawler.core.storage import ReviewStore
 from comment_crawler.core.utils import CollectionResult
 
 
 class CliTests(unittest.TestCase):
+    def test_mediacrawler_no_longer_exposes_a_post_count_cap(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                parser().parse_args(['collect', 'douyin', '--query', 'camera', '--max-posts', '15', '--output', './run'])
+
     def test_xiaohongshu_query_and_target_dry_run_require_profile(self):
         with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(['collect', 'xiaohongshu', '--query', '相机', '--profile', tmp,

@@ -42,6 +42,23 @@ class PaginationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '分页'):
             list(collector._comments('v', 'key'))
 
+    def test_youtube_never_reads_api_key_from_config(self):
+        collector = YouTubeCollector({'queries': ['camera'], 'api_key': 'must-not-be-used'}, {})
+        with patch.dict(os.environ, {}, clear=True):
+            result = collector.collect()
+        self.assertEqual(result.records, [])
+        self.assertTrue(any('YOUTUBE_API_KEY' in error for error in result.errors))
+
+    def test_youtube_sends_api_key_in_header_not_url(self):
+        collector = YouTubeCollector({}, {'delay_seconds': 0})
+        with patch('comment_crawler.collectors.youtube.request_json', return_value={'items': []}) as request:
+            collector._api('search', {'part': 'snippet', 'q': 'camera'}, 'fixture-key')
+        url = request.call_args.args[0]
+        options = request.call_args.kwargs
+        self.assertNotIn('key=', url)
+        self.assertNotIn('fixture-key', url)
+        self.assertEqual(options['headers'], {'x-goog-api-key': 'fixture-key'})
+
     def test_opencli_refreshes_non_memomind_post(self):
         collector = OpenCLIRedditCollector({'queries': ['camera'], 'known_post_ids': ['t3_a']}, {})
         collector._run_json = lambda args: ([{'id': 'a', 'title': 'Camera review', 'url': 'https://reddit.com/a'}] if args[0] == 'search' else [{'type': 'L0', 'text': 'New comment', 'author': 'a'}])
@@ -51,6 +68,7 @@ class PaginationTests(unittest.TestCase):
     def test_reddit_search_pages_and_morechildren(self):
         collector = RedditCollector({'queries': ['camera'], 'subreddits': ['cameras']}, {})
         collector._token = lambda: 'fixture'
+        listing_limits = []
         def api(path, token):
             params = parse_qs(urlparse(path).query)
             if '/search' in path:
@@ -58,6 +76,7 @@ class PaginationTests(unittest.TestCase):
                 return {'data': {'children': [{'data': {'id': pid, 'name': 't3_' + pid, 'title': 'camera', 'permalink': '/comments/' + pid}}], 'after': None if pid == 'b' else 'cursor'}}
             if '/morechildren' in path:
                 return {'json': {'errors': [], 'data': {'things': [{'kind': 't1', 'data': {'id': params['children'][0], 'name': 't1_' + params['children'][0], 'body': 'reply', 'parent_id': params['link_id'][0]}}]}}}
+            listing_limits.extend(params.get('limit', []))
             pid = path.split('/')[2].split('.')[0]
             return [{}, {'data': {'children': [{'kind': 'more', 'data': {'children': [pid + 'reply'], 'count': 1}}]}}]
         collector._api = api
@@ -65,6 +84,51 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual(result.errors, [])
         self.assertEqual({r.external_id for r in result.records}, {'t3_a', 't3_b', 't1_areply', 't1_breply'})
         self.assertTrue(all(r.reply_count is None for r in result.records if r.content_type == 'comment'))
+        self.assertEqual(listing_limits, ['100', '100'])
+
+    def test_reddit_expands_all_comment_ids_in_more_nodes_without_a_total_cap(self):
+        collector = RedditCollector({}, {})
+        collector._token = lambda: 'fixture'
+        ids = [f'c{index}' for index in range(601)]
+        requested_batches = []
+        def api(path, token):
+            params = parse_qs(urlparse(path).query)
+            if '/comments/' in path:
+                return [{}, {'data': {'children': [{'kind': 'more', 'data': {'children': ids, 'count': len(ids)}}]}}]
+            batch = params['children'][0].split(',')
+            requested_batches.append(batch)
+            return {'json': {'errors': [], 'data': {'things': [
+                {'kind': 't1', 'data': {'id': item, 'name': 't1_' + item, 'body': 'comment',
+                                       'parent_id': params['link_id'][0]}}
+                for item in batch
+            ]}}}
+        collector._api = api
+
+        records = list(collector._comments({'id': 'post', 'permalink': '/comments/post'}, 'fixture'))
+
+        self.assertEqual(len(records), 601)
+        self.assertEqual(len(requested_batches), 7)
+        self.assertTrue(all(len(batch) <= 100 for batch in requested_batches))
+
+    def test_reddit_oauth_keeps_only_top_level_comments_and_direct_replies(self):
+        collector = RedditCollector({}, {})
+        deep_comment = {'kind': 't1', 'data': {
+            'id': 'deep', 'name': 't1_deep', 'body': 'third-level reply', 'parent_id': 't1_reply',
+        }}
+        reply = {'kind': 't1', 'data': {
+            'id': 'reply', 'name': 't1_reply', 'body': 'second-level reply', 'parent_id': 't1_root',
+            'replies': {'data': {'children': [deep_comment]}},
+        }}
+        root_comment = {'kind': 't1', 'data': {
+            'id': 'root', 'name': 't1_root', 'body': 'top-level comment', 'parent_id': 't3_post',
+            'replies': {'data': {'children': [reply]}},
+        }}
+        collector._api = lambda *_: [{}, {'data': {'children': [root_comment]}}]
+
+        records = list(collector._comments({'id': 'post', 'permalink': '/comments/post'}, 'fixture'))
+
+        self.assertEqual([record.external_id for record in records], ['t1_root', 't1_reply'])
+        self.assertEqual([record.metadata['comment_level'] for record in records], [1, 2])
 
     def test_youtube_keeps_collecting_other_videos_and_queries_after_comment_error(self):
         collector = YouTubeCollector({'queries': ['camera', 'second-query']}, {})
@@ -85,10 +149,37 @@ class PaginationTests(unittest.TestCase):
 
     def test_opencli_no_twenty_post_cap_and_warns_backend_limit(self):
         collector = OpenCLIRedditCollector({'queries': ['camera'], 'read_comments': False}, {})
-        collector._run_json = lambda args: [{'id': str(i), 'title': 'Camera', 'url': f'https://reddit.com/{i}'} for i in range(30)]
+        called = []
+        collector._run_json = lambda args: called.append(args) or [
+            {'id': str(i), 'title': 'Camera', 'url': f'https://reddit.com/{i}'} for i in range(150)
+        ]
         result = collector.collect()
-        self.assertEqual(len(result.records), 30)
+        self.assertEqual(len(result.records), 150)
         self.assertTrue(result.warnings)
+        requested_limit = called[0][called[0].index('--limit') + 1]
+        self.assertGreater(int(requested_limit), 100)
+
+    def test_opencli_reads_more_than_five_hundred_visible_comments_and_only_two_levels(self):
+        collector = OpenCLIRedditCollector({}, {})
+        called = []
+        comments = [{'type': 'L0', 'text': f'Comment {index}', 'author': f'author-{index}'} for index in range(601)]
+        comments.extend([
+            {'type': 'L1', 'text': 'First-level reply', 'author': 'reply-author'},
+            {'type': 'L2', 'text': 'Deeper reply should be omitted', 'author': 'deep-author'},
+        ])
+        collector._run_json = lambda args: called.append(args) or comments
+
+        records = collector._comment_records({'id': 'post-1', 'url': 'https://reddit.com/post-1', 'comments': 1})
+
+        self.assertEqual(len(records), 602)
+        self.assertEqual({record.metadata['comment_level'] for record in records}, {1, 2})
+        self.assertEqual(records[-1].metadata['comment_level'], 2)
+        limit = called[0][called[0].index('--limit') + 1]
+        depth = called[0][called[0].index('--depth') + 1]
+        replies = called[0][called[0].index('--replies') + 1]
+        self.assertGreater(int(limit), 500)
+        self.assertEqual(depth, '2')
+        self.assertGreater(int(replies), 500)
 
     def test_reddit_missing_morechildren_is_reported(self):
         collector = RedditCollector({}, {})
