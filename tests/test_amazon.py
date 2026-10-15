@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 import importlib.util
 
-from comment_crawler.collectors.amazon import collect_pages, review_record, validate_target
+from comment_crawler.collectors.amazon import _ocr_images, collect_pages, review_record, validate_target
 from comment_crawler.core.storage import ReviewStore
 from comment_crawler.core.utils import CollectionResult
 
@@ -47,6 +47,14 @@ class AmazonTests(unittest.TestCase):
             self.assertEqual(store.upsert(first), 'inserted')
             self.assertEqual(store.upsert(second), 'updated')
             self.assertEqual(store.count(), 1)
+
+    def test_image_ocr_reports_missing_executable(self):
+        review = MagicMock()
+        review.locator.return_value.count.return_value = 1
+        with patch('comment_crawler.collectors.amazon.shutil.which', return_value=None):
+            texts, status = _ocr_images(review)
+        self.assertEqual((texts, status), ([], 'ocr_unavailable'))
+        review.locator.return_value.first.screenshot.assert_not_called()
 
     def test_two_visible_pages_then_no_next_link(self):
         class Page:
@@ -125,6 +133,29 @@ class AmazonTests(unittest.TestCase):
                          ['post', 'comment', 'comment', 'comment'])
         self.assertEqual(result.records[2].parent_id, 'customer_review-r1')
         self.assertTrue(result.records[2].is_official)
+
+    @unittest.skipUnless(importlib.util.find_spec('playwright'), '需要 browser extra')
+    def test_request_more_reviews_is_reported_as_limited(self):
+        from playwright.sync_api import sync_playwright
+
+        product = '<span id="productTitle">Example camera</span>'
+        reviews = '''<div data-hook="review" id="customer_review-r1">
+          <span data-hook="review-body">One visible review</span></div>
+          <a href="/portal/customer-reviews/ajax/request-more-reviews/submit">Send a request</a>'''
+
+        def render(page, url):
+            page.set_content(product if '/dp/' in url else reviews)
+
+        with sync_playwright() as pw, patch('comment_crawler.collectors.amazon._navigate', side_effect=render):
+            browser = pw.chromium.launch(headless=True)
+            try:
+                result = CollectionResult('amazon')
+                collect_pages(browser.new_page(), 'https://www.amazon.com/dp/B012345678', 0, result)
+            finally:
+                browser.close()
+        self.assertEqual(result.status, 'backend_limited')
+        self.assertEqual(len(result.records), 2)
+        self.assertIn('请求更多评价', result.warnings[0])
 
 
 if __name__ == '__main__':

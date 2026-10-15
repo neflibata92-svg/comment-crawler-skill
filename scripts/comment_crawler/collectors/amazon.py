@@ -4,6 +4,7 @@ from __future__ import annotations
 from io import BytesIO
 from datetime import datetime, timezone
 import re
+import shutil
 import time
 from urllib.parse import urlparse
 
@@ -58,6 +59,8 @@ def _ocr_images(review) -> tuple[list[str], str]:
         from PIL import Image
     except ImportError:
         return [], 'dependencies_missing'
+    if shutil.which('tesseract') is None:
+        return [], 'ocr_unavailable'
     texts = []
     for image in images.all():
         try:
@@ -157,6 +160,9 @@ def collect_pages(page, product_url: str, delay: float, result: CollectionResult
         seen_pages.add(signature)
         next_link = page.locator('li.a-last:not(.a-disabled) a')
         if not next_link.count():
+            if page.locator('a[href*="/ajax/request-more-reviews/submit"]').count():
+                result.status = 'backend_limited'
+                result.warnings.append('Amazon 当前评价页未提供下一页，只显示请求更多评价入口；已保存当前可见评价，不代表全部文字评价')
             return
         href = next_link.first.get_attribute('href') or ''
         parsed = urlparse(href)
