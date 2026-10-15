@@ -1,6 +1,6 @@
 # Amazon 商品评价
 
-首版仅开放 `amazon.com` 美国站适配，目前通过本地样本测试，尚未完成真实页面验收。可传 10 位 ASIN 或美国站 `/dp/ASIN`、`/gp/product/ASIN` 商品链接；链接会归一为 `https://www.amazon.com/dp/ASIN`。其他国家站点需要分别核对页面结构后才能启用；目前会拒绝。没有关键词发现入口。
+首版仅开放 `amazon.com` 美国站适配，目前通过本地样本测试；指定商品的真实页面遇到验证码，尚未完成真实评价读取验收。可传 10 位 ASIN 或美国站 `/dp/ASIN`、`/gp/product/ASIN` 商品链接；链接会归一为 `https://www.amazon.com/dp/ASIN`。其他国家站点需要分别核对页面结构后才能启用；目前会拒绝。没有关键词发现入口。
 
 ```bash
 comment-crawler login amazon --profile ~/Library/Application\ Support/comment-crawler/amazon

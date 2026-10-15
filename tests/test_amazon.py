@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
+import importlib.util
 
 from comment_crawler.collectors.amazon import collect_pages, review_record, validate_target
 from comment_crawler.core.storage import ReviewStore
@@ -92,6 +93,38 @@ class AmazonTests(unittest.TestCase):
         self.assertEqual([item.content_type for item in result.records], ['post', 'comment', 'comment'])
         self.assertEqual(result.records[1].external_id, 'customer_review-1')
         self.assertEqual(result.records[2].external_id, 'customer_review-2')
+
+    @unittest.skipUnless(importlib.util.find_spec('playwright'), '需要 browser extra')
+    def test_rendered_product_reviews_and_seller_response(self):
+        from playwright.sync_api import sync_playwright
+
+        product = '<span id="productTitle">Example camera</span>'
+        first = '''<div data-hook="review" id="customer_review-r1">
+          <span class="a-profile-name">Sample buyer</span>
+          <a data-hook="review-title">Clear picture</a>
+          <span data-hook="review-body">Works in daylight</span>
+          <span data-hook="review-date">Reviewed in the United States on October 14, 2026</span>
+          <i data-hook="review-star-rating">4.0 out of 5 stars</i>
+          <div data-hook="seller-response">Response from the seller: Thank you</div>
+          </div><ul><li class="a-last"><a href="/product-reviews/B012345678/?pageNumber=2">Next</a></li></ul>'''
+        second = '''<div data-hook="review" id="customer_review-r2">
+          <span data-hook="review-body">Works at night</span>
+          </div><ul><li class="a-last a-disabled">Next</li></ul>'''
+
+        def render(page, url):
+            page.set_content(product if '/dp/' in url else second if 'pageNumber=2' in url else first)
+
+        with sync_playwright() as pw, patch('comment_crawler.collectors.amazon._navigate', side_effect=render):
+            browser = pw.chromium.launch(headless=True)
+            try:
+                result = CollectionResult('amazon')
+                collect_pages(browser.new_page(), 'https://www.amazon.com/dp/B012345678', 0, result)
+            finally:
+                browser.close()
+        self.assertEqual([r.content_type for r in result.records],
+                         ['post', 'comment', 'comment', 'comment'])
+        self.assertEqual(result.records[2].parent_id, 'customer_review-r1')
+        self.assertTrue(result.records[2].is_official)
 
 
 if __name__ == '__main__':
