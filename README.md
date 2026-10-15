@@ -2,13 +2,13 @@
 
 **维护者：Neflibata**
 
-中文优先的多平台帖子与评论采集 Skill，也可作为独立 Python CLI 使用。覆盖淘宝／天猫、京东、Kickstarter、Reddit、YouTube、小红书，以及通过外置 MediaCrawler 接入的抖音、B站、微博、知乎和贴吧。关键词由使用者指定，没有内置品牌过滤；采集器不设置帖子或评论的本地总量截断。记录逐条写入 SQLite，可导出 CSV、JSONL，并报告覆盖限制与失败原因。
+中文优先的多平台帖子与评论采集 Skill，也可作为独立 Python CLI 使用。覆盖 Amazon 美国站、淘宝／天猫、京东、Kickstarter、Reddit、YouTube、小红书，以及通过外置 MediaCrawler 接入的抖音、B站、微博、知乎和贴吧。关键词由使用者指定，没有内置品牌过滤；采集器不设置帖子或评论的本地总量截断。记录逐条写入 SQLite，可导出 CSV、JSONL，并报告覆盖限制与失败原因。
 
 **先选入口：** YouTube 使用 Data API key；Reddit 推荐 OAuth，也可使用已登录 Chrome 中的 OpenCLI；Amazon、淘宝／天猫、京东和小红书使用用户手动登录的专用浏览器档案；Kickstarter 从公开项目页进入；抖音、B站、微博、知乎和贴吧通过单独准备的 MediaCrawler checkout 运行。采集器不设帖子或评论总量上限，但平台分页、可见范围、权限、配额及个别上游入口能力仍会限制结果；分页结束不代表平台全量。
 
 **快速导航：** [安装](#安装) · [快速开始](#快速开始) · [MediaCrawler 五平台](#抖音b站微博知乎和贴吧) · [支持范围](#支持范围) · [输出与恢复](#输出与恢复) · [评论分析](#分析已有采集结果) · [开发验证](#开发验证)
 
-**v0.1.0 验证边界：** 2026-10-13 已在用户登录态用 `memomind` 做过一次小红书试采，用户中断了运行；结果与字段缺失见 [验收记录](VALIDATION.md)。这次试采不证明全量或后续页面结构仍然可用。Amazon 指定商品在用户自行完成页面验证后读到 8 条可见评价；页面只提供请求更多评价入口，因此运行状态为 `backend_limited`，图片 OCR 尚未验收。其他平台的权限、配额和接口也需分别核实；“分页结束”不表示平台所有评论均可见。
+**v0.1.0 验证边界：** 2026-10-13 已在用户登录态用 `memomind` 做过一次小红书试采，用户中断了运行；结果与字段缺失见 [验收记录](VALIDATION.md)。这次试采不证明全量或后续页面结构仍然可用。Amazon 美国站使用专用浏览器档案读取页面可见评价，不接入 MCP 或 SP-API。Rokid 和 RayNeo 商品在完成页面验证后各读到 8 条可见评价；页面只提供请求更多评价入口，因此运行状态为 `backend_limited`。评价图片 OCR 尚未验收。其他平台的权限、配额和接口也需分别核实；“分页结束”不表示平台所有评论均可见。
 
 ## 安装
 
@@ -80,7 +80,16 @@ comment-crawler collect jd --target 'https://item.jd.com/123456.html' --profile 
 
 检查目标后，去掉第二条命令的 `--dry-run` 即可开始。浏览器档案必须位于所有 Git 仓库之外；程序会拒绝仓库内路径。Reddit 两种入口的差异及各平台命令见下表和对应指南。
 
-Amazon 首版仅开放美国站适配，接受 10 位 ASIN 或 `amazon.com` 商品链接；其他国家站点会明确拒绝，逐站验证后才能加入。指定商品已有一次受页面返回范围限制的真实试采，详情见 [Amazon 指南](references/amazon.md)。
+Amazon 首版仅开放美国站适配，接受 10 位 ASIN 或 `amazon.com` 商品链接；其他国家站点会明确拒绝，逐站验证后才能加入。用独立浏览器档案登录后，先用 `--dry-run` 检查目标，再开始采集：
+
+```bash
+comment-crawler login amazon --profile ~/Library/Application\ Support/comment-crawler/amazon
+comment-crawler collect amazon --target 'https://www.amazon.com/dp/B0FQ6VT9FT' --profile ~/Library/Application\ Support/comment-crawler/amazon --output ./runs/amazon-rokid --dry-run
+comment-crawler collect amazon --target 'https://www.amazon.com/dp/B0FQ6VT9FT' --profile ~/Library/Application\ Support/comment-crawler/amazon --output ./runs/amazon-rokid --delay 2
+comment-crawler check --output ./runs/amazon-rokid
+```
+
+示例 ASIN 可替换为目标商品的 10 位 ASIN 或美国站商品链接。浏览器档案放在仓库外，由用户自行登录及完成页面验证。采集器只保存当前页面实际可见的商品信息和评价；遇到验证码或访问拒绝会停止。如果页面没有下一页而只显示“请求更多评价”，运行结果会标记为 `backend_limited`，不会自动提交请求，也不代表商品评价全量。商品字段、已验证购买标记、商家回复关系和 OCR 条件见 [Amazon 指南](references/amazon.md)；两件商品的真实页面验收记录见 [验收记录](VALIDATION.md)。
 
 小红书支持关键词和笔记链接两种入口。采集器分别保存页面可见的笔记标题、正文、匿名作者标识、发布时间和互动数，以及评论和楼中楼。用户在专用浏览器中自行完成登录；登录命令只检查页面是否显示拦截，真实搜索及评论权限仍需采集试运行确认：
 
