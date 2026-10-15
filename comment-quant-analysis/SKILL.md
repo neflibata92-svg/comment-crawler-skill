@@ -33,6 +33,7 @@ description: Use when the user provides comment, review, or feedback files and a
 3. 首轮生成 `--scope all` 探索结果；人工逐条复核评论是否有效、是否与目标相关、评论/回复关系是否可判、主题和痛点标签及证据。购买意向（如“想买”）不自动算购买障碍；严重程度只采用人工基于任务影响给出的 1–5 分。
 4. 将人工结果写回首轮 `cleaned_comments.csv`，保留 `analysis_record_key`，对完成人工复核的行设置 `annotation_status=manual_reviewed`，并填写 `product_relevance=related/unrelated/uncertain`。用相同原始输入和 `--annotations` 重跑 `--scope verified-target` 得到目标产品口径报告。
 5. 依照参考文件分别计算全体有效评论与目标相关有效评论分母；所有提及率带分子、分母，作者数和来源覆盖分别汇报。
+6. 首轮 `opportunities.csv` 只提供证据候选。逐项对照 `evidence_index.csv`，填写产品方向、待验证含义、验证方法和观察指标；保留痛点与证据 ID，再以 `--opportunity-review` 重新运行。证据变化或任何一项未填写时，不出具已人工撰写的产品机会表。
 6. 输出结论摘要、清洗摘要、痛点/主题表、需求与场景、购买障碍与正向反馈、可支持的分组趋势、机会候选及待复核清单。报告正文引用可精简，但完整标签证据映射必须留在 `evidence_index.csv`。
 
 ## 本地命令

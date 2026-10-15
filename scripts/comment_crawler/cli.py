@@ -3,12 +3,22 @@ from __future__ import annotations
 
 import argparse
 import csv
+from contextlib import contextmanager
 import importlib.util
 import json
 import os
 from pathlib import Path
 import shutil
 import sys
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - Unix
+    msvcrt = None
 
 from .core.schema import utc_now
 from .core.storage import QualitySummary, ReviewStore
@@ -71,6 +81,7 @@ def parser():
     analyze.add_argument('--near-duplicate-threshold', type=float, default=0.9,
                          help='近似重复聚类的字符三元组 Jaccard 阈值（0.5–1，默认 0.9）')
     analyze.add_argument('--annotations', help='人工复核 CSV；可编辑此前输出的 cleaned_comments.csv 后传入')
+    analyze.add_argument('--opportunity-review', help='逐项填写产品机会后的 opportunities.csv；核对痛点与证据 ID')
     analyze.add_argument('--scope', choices=('all', 'verified-target'), default='all',
                          help='all 为全体有效评论探索；verified-target 仅统计人工确认相关的评论')
     video = sub.add_parser('analyze-video', help='在本机抽取视频关键帧、转写音轨并生成多模态分析材料')
@@ -174,8 +185,43 @@ def resolve_config(args):
     return config
 
 
+@contextmanager
+def _task_lock(output):
+    output.mkdir(parents=True, exist_ok=True)
+    with (output / '.task.lock').open('a+b') as handle:
+        try:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            elif msvcrt is not None:  # pragma: no cover - Windows
+                if handle.tell() == 0:
+                    handle.write(b'\0')
+                    handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:  # pragma: no cover
+                raise RuntimeError('当前系统缺少任务文件锁支持')
+        except (BlockingIOError, OSError) as exc:
+            raise ValueError(f'任务目录正在被另一进程使用：{output}') from exc
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            else:  # pragma: no cover - Windows
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 def run_collect(args):
     config = resolve_config(args)
+    if args.dry_run:
+        return _run_collect(args, config)
+    output = Path(args.output).expanduser().resolve()
+    with _task_lock(output):
+        return _run_collect(args, config)
+
+
+def _run_collect(args, config):
     output = Path(args.output).expanduser().resolve()
     if args.dry_run:
         print(json.dumps({'source': args.source, 'output': str(output), 'status': 'input_validated',
@@ -243,13 +289,24 @@ def run_collect(args):
                   'by_content_type': dict(sorted(run_by_content_type.items())),
                   'field_coverage': quality.as_dict(),
                   'warnings': result.warnings, 'errors': result.errors,
+                  'export_status': 'pending',
                   'coverage': '仅本次入口返回的可见记录，不等同于平台全量'}
         # 报告先落盘，即使导出被中断，SQLite 与运行状态仍保留。
         temp = output / 'last_run.json.tmp'
         temp.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
         temp.replace(output / 'last_run.json')
-        store.export_jsonl(output / 'records.jsonl')
-        store.export_csv(output / 'records.csv')
+        try:
+            store.export_jsonl(output / 'records.jsonl')
+            store.export_csv(output / 'records.csv')
+        except OSError as exc:
+            report['export_status'] = 'failed'
+            report['status'] = 'failed'
+            report['errors'].append(f'导出失败，SQLite 主库保留：{type(exc).__name__}')
+        else:
+            report['export_status'] = 'completed'
+        finally:
+            temp.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
+            temp.replace(output / 'last_run.json')
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 130 if interrupted else 1 if result.errors else 2 if result.status in ('backend_limited', 'stalled') else 0
 
@@ -294,7 +351,7 @@ def main(argv=None):
         if args.command == 'analyze':
             from .analysis import run_analysis
             result = run_analysis(args.input, args.output, args.product, args.brand,
-                                  args.near_duplicate_threshold, args.annotations, args.scope)
+                                  args.near_duplicate_threshold, args.annotations, args.scope, args.opportunity_review)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             if not result['workbook_created']:
                 print("未生成 XLSX；如需工作簿，请安装分析依赖：python -m pip install '.[analysis]'", file=sys.stderr)
@@ -313,8 +370,9 @@ def main(argv=None):
             raise ValueError('输出目录不存在 records.sqlite3')
         with ReviewStore(output / 'records.sqlite3') as store:
             if args.command == 'export':
-                store.export_csv(output / 'records.csv')
-                store.export_jsonl(output / 'records.jsonl')
+                with _task_lock(output):
+                    store.export_csv(output / 'records.csv')
+                    store.export_jsonl(output / 'records.jsonl')
             last_run_path = output / 'last_run.json'
             try:
                 last_run = json.loads(last_run_path.read_text(encoding='utf-8')) if last_run_path.exists() else None

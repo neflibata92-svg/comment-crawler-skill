@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from pathlib import Path
 import shutil
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 from .video_analysis import _ocr_frames, _write_contact_sheets, _write_json
 
@@ -27,6 +28,16 @@ def is_supported_platform_url(url: str) -> bool:
         return False
     host = parsed.hostname.casefold()
     return any(host == domain or host.endswith("." + domain) for domain in _PLATFORM_DOMAINS)
+
+
+def _source_reference_url(url: str) -> str:
+    parsed = urlsplit(url)
+    query = ""
+    if parsed.hostname and parsed.hostname.casefold() in {"youtube.com", "www.youtube.com", "m.youtube.com"} and parsed.path == "/watch":
+        video_id = parse_qs(parsed.query).get("v", [""])[0]
+        if re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+            query = urlencode({"v": video_id})
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, ""))
 
 
 def _guard_document_navigation(route: Any) -> None:
@@ -110,10 +121,15 @@ class WebVideoSession:
                 raise RuntimeError("网页已打开，但没有找到可见的视频播放器")
             _, video, box = max(candidates, key=lambda item: item[0])
             video.scroll_into_view_if_needed(timeout=10_000)
-            page.wait_for_function(
-                "() => { const v = document.querySelector('video'); return v && v.readyState >= 2; }",
-                timeout=25_000,
-            )
+            video.evaluate("""async v => {
+              if (v.readyState >= 2) return;
+              await new Promise((resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error('video_ready_timeout')), 25000);
+                const done = () => { clearTimeout(timer); resolve(); };
+                v.addEventListener('loadeddata', done, {once: true});
+                if (v.readyState >= 2) done();
+              });
+            }""")
             media = video.evaluate("""async v => {
               v.muted = true;
               v.playsInline = true;
@@ -168,7 +184,7 @@ class WebVideoSession:
             manifest = {
                 "status": "completed",
                 "capture_method": "rendered_webpage_screenshot",
-                "source_url": urlunsplit((*urlsplit(url)[:3], "", "")),
+                "source_url": _source_reference_url(url),
                 "media": {
                     "duration_seconds": duration,
                     "width": media.get("width"),

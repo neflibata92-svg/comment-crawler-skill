@@ -158,11 +158,12 @@ class YouTubeCollector:
                         "maxResults": 50, "order": search_order,
                     }, api_key):
                         ids = []
+                        page_ids = set()
                         for item in search["items"]:
                             video_id = clean_text((item.get("id") or {}).get("videoId"))
-                            if video_id and video_id not in seen_video_ids:
+                            if video_id and video_id not in seen_video_ids and video_id not in page_ids:
                                 ids.append(video_id)
-                                seen_video_ids.add(video_id)
+                                page_ids.add(video_id)
                         if not ids:
                             continue
                         try:
@@ -191,6 +192,7 @@ class YouTubeCollector:
                                     f"YouTube 视频 {video_id} 网页取帧 OCR 未完成；检查浏览器播放状态、Playwright 和 OCR 依赖"
                                 )
                             result.add(video_record)
+                            seen_video_ids.add(video_id)
                             # 已存视频仍刷新评论；单个视频失败不应阻断其余搜索结果。
                             try:
                                 result.extend(self._comments(video_id, api_key))

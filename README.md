@@ -142,14 +142,14 @@ API 也支持 `--config examples/config.json`；命令行参数覆盖同名配�
 每个 `--output` 目录包含：
 
 - `records.sqlite3`：每条记录立即提交的主库。
-- `records.csv`、`records.jsonl`：结束时的导出；可用 `export` 重新生成。
+- `records.csv`、`records.jsonl`：结束时的导出；先写临时文件再替换单个导出文件，可用 `export` 重新生成。CSV 的 `csv_escaped_fields` 标记为防公式执行而加前置单引号的字段，分析器读取新导出的 CSV 时会还原原文；旧 CSV 缺少标记时请优先使用 SQLite。
 - `task.json`：来源及目标，防止误将不同任务混入同一目录。
-- `last_run.json`：新增、更新、未变化、按内容类型统计、字段完整度、错误和结束状态。
+- `last_run.json`：新增、更新、未变化、按内容类型统计、字段完整度、错误、结束状态和 `export_status`。导出失败或中断时，以 SQLite 主库为准。
 - `progress.json`（小红书）：按笔记保存待处理／处理中／可见扫描结束状态，不含浏览器会话或签名链接。
 - `.mediacrawler/`：上游生成的原始 JSONL、OCR 文本清单，作为导入和恢复依据；保留在任务目录，本地数据不要提交到 Git。
 - `.mediacrawler/<平台代码>/media/`：上游实际下载的媒体；视频完成抽帧与画面文字 OCR、图片完成 OCR 后自动删除源文件。`.mediacrawler/video-analysis/` 保存关键帧、联系表和文字结果；音轨转写仍需使用独立的本地 `analyze-video` 流程。
 
-Ctrl+C 会保留已提交记录。小红书按笔记写入检查点；搜索结果每次重新进入并扫描，因为页面没有可持久化的搜索游标，已发现的笔记会立即记入检查点。中断中的笔记从评论扫描起点重读，并按稳定记录键去重。默认跳过“可见扫描结束”的笔记；使用 `--refresh-completed` 可重新扫描这些笔记，获取可能新增的可见评论。全部已扫描笔记的重跑会作为成功的无操作运行结束。连续六轮无新增只表示当前页面扫描停滞，不证明平台全量。旧版任务若没有 `progress.json`，会先将数据库里已有笔记作为待扫描项重扫一次；旧检查点会自动迁移。重扫笔记时也会把该笔记旧版按作者和时间生成的合成评论 ID（含楼中楼父 ID）迁移到当前去重键。单篇笔记请求失败会保留待重试状态并继续后续笔记；401、403 或 429 会停止任务。MediaCrawler 后端会把运行中生成的 JSONL 导入 SQLite；中断后再次运行会从原入口重扫并按稳定 ID 去重，不支持精确平台游标续跑。强制终止可能留下旧报告或不完整导出，SQLite 是恢复依据；本地旧记录不会自动删除。
+Ctrl+C 会保留已提交记录。小红书按笔记写入检查点；搜索结果每次重新进入并扫描，因为页面没有可持久化的搜索游标，已发现的笔记会立即记入检查点。中断中的笔记从评论扫描起点重读，并按稳定记录键去重。默认跳过“可见扫描结束”的笔记；使用 `--refresh-completed` 可重新扫描这些笔记，获取可能新增的可见评论。全部已扫描笔记的重跑会作为成功的无操作运行结束。连续六轮无新增只表示当前页面扫描停滞，不证明平台全量。旧版任务若没有 `progress.json`，会先将数据库里已有笔记作为待扫描项重扫一次；旧检查点会自动迁移。重扫笔记时也会把该笔记旧版按作者和时间生成的合成评论 ID（含楼中楼父 ID）迁移到当前去重键。单篇笔记请求失败会保留待重试状态并继续后续笔记；401、403 或 429 会停止任务。MediaCrawler 后端会把运行中生成的 JSONL 导入 SQLite；同 ID 帖子采用导出顺序中最后一条记录，中断后再次运行会从原入口重扫并按稳定 ID 去重，不支持精确平台游标续跑。强制终止可能留下旧报告或 `export_status=pending`；SQLite 是恢复依据，本地旧记录不会自动删除。
 
 一次运行只选一个平台后端。Reddit OAuth 的来源为 `reddit`，OpenCLI 为 `reddit_opencli`，且应分任务目录使用；不要把两路评论直接合计。旧项目数据库不自动迁移。
 
@@ -189,6 +189,8 @@ comment-crawler analyze \
 ```
 
 `verified-target` 只统计人工确认与目标产品相关、且纳入分析的评论。评论意向“想买”不会自动计为购买障碍；严重度只汇总人工评估的 1–5 分。完整标签证据索引保存在 `evidence_index.csv`。规则预标注不能稳定识别反讽、上下文指代和隐含需求；单人复核也不等于标注者间信度。
+
+`opportunities.csv` 首轮只列证据候选，不自动写产品方案。正式报告前逐项核对 `evidence_index.csv`，填写每行的 `product_opportunity`、`product_implication`、`validation_method` 和 `suggested_metrics`，保留 `pain_label`、`content_group` 与 `evidence_ids`。然后以相同输入和人工评论标注重新运行，加上 `--opportunity-review ./runs/xhs-memomind-analysis/opportunities.csv`；缺失、未填写或证据 ID 变化会报错。分析文件先写入临时目录，全部完成后才发布到输出目录；失败不会留下半成品报告。
 
 一个任务目录中的 `records.sqlite3`、`records.csv`、`records.jsonl` 是同一批数据的不同格式，分析时只选一种作为记录输入，优先使用 SQLite 主库。`task.json` 和 `last_run.json` 用来说明采集来源、状态和覆盖限制，不是评论记录；不同任务目录或不同 Reddit 后端也不要默认合并。评论分析只基于用户指定文件，不自动联网补充或启动新的采集任务。
 

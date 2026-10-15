@@ -12,6 +12,7 @@ from comment_crawler.collectors.mediacrawler import (
     collect_mediacrawler, download_media_for_posts,
 )
 from comment_crawler.core.utils import CollectionResult
+from comment_crawler.media_ocr import process_media_assets
 
 
 class MediaCrawlerImportTests(unittest.TestCase):
@@ -51,6 +52,43 @@ class MediaCrawlerImportTests(unittest.TestCase):
             self.assertEqual(counts, (23, 601))
             self.assertEqual(len(records), 624)
             self.assertFalse(any("上限" in warning for warning in result.warnings))
+
+    def test_later_comment_version_replaces_earlier_version(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rows = [{"aweme_id": "post1", "title": "MemoMind review"}]
+            comments = [
+                {"aweme_id": "post1", "comment_id": "c1", "content": "old text"},
+                {"aweme_id": "post1", "comment_id": "c1", "content": "new text"},
+                {"aweme_id": "post1", "comment_id": "r1", "parent_comment_id": "c1", "content": "old reply"},
+                {"aweme_id": "post1", "comment_id": "r1", "parent_comment_id": "c1", "content": "new reply"},
+            ]
+            counts, records, _ = self._import_rows(root, rows, ["MemoMind"], comments)
+            self.assertEqual(counts, (1, 2))
+            self.assertEqual([record.body for record in records[1:]], ["new text", "new reply"])
+
+    def test_media_symlink_is_skipped_without_processing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            outside = root / "outside"
+            outside.mkdir()
+            media_root = root / "dy" / "media"
+            media_root.mkdir(parents=True)
+            (media_root / "post1").symlink_to(outside, target_is_directory=True)
+            counts, records, result = self._import_rows(root, [{"aweme_id": "post1", "title": "MemoMind"}], ["MemoMind"])
+            self.assertEqual(counts, (0, 0))
+            self.assertEqual(records, [])
+            self.assertTrue(any("符号链接" in warning for warning in result.warnings))
+
+    def test_nested_media_symlink_is_rejected_before_ocr(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            media = root / "dy" / "media" / "post1"
+            media.mkdir(parents=True)
+            external = root.parent / "external-image.jpg"
+            (media / "image.jpg").symlink_to(external)
+            with self.assertRaisesRegex(ValueError, "符号链接"):
+                process_media_assets(media, root, "dy:post1", download_requested=False, request_status="not_requested")
 
     def test_search_results_also_need_a_keyword_hit_in_title_or_body(self):
         with tempfile.TemporaryDirectory() as temporary:

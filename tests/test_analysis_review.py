@@ -3,11 +3,59 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from comment_crawler.analysis import run_analysis
 
 
 class AnalysisReviewTests(unittest.TestCase):
+    def test_non_object_jsonl_fails_without_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "input").mkdir()
+            source = root / "input" / "input.jsonl"
+            source.write_text('{"source":"youtube","body":"valid"}\n[]\n', encoding="utf-8")
+            output = root / "analysis"
+            with self.assertRaisesRegex(ValueError, "第 2 行必须是对象"):
+                run_analysis([str(source)], str(output))
+            self.assertFalse(output.exists())
+
+    def test_output_is_not_published_when_report_write_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "input").mkdir()
+            source = root / "input" / "input.jsonl"
+            self._write_jsonl(source, [{"source": "youtube", "content_type": "comment", "external_id": "c1", "body": "太贵"}])
+            output = root / "analysis"
+            with patch("comment_crawler.analysis._build_report", side_effect=RuntimeError("report failed")):
+                with self.assertRaisesRegex(RuntimeError, "report failed"):
+                    run_analysis([str(source)], str(output))
+            self.assertFalse(output.exists())
+            self.assertEqual(list(root.glob(".analysis.*")), [])
+
+    def test_opportunity_review_requires_current_evidence_and_complete_fields(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "input").mkdir()
+            source = root / "input" / "input.jsonl"
+            self._write_jsonl(source, [{"source": "youtube", "content_type": "comment", "external_id": "c1", "body": "价格太贵"}])
+            first = root / "first"
+            run_analysis([str(source)], str(first))
+            review = first / "opportunities.csv"
+            rows = self._read_csv(review)
+            self.assertTrue(rows)
+            for row in rows:
+                row.update(product_opportunity="评估价格方案", product_implication="价格可能阻碍购买，待验证",
+                           validation_method="访谈价格决策", suggested_metrics="购买放弃率")
+            with review.open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+                writer.writeheader()
+                writer.writerows(rows)
+            final = root / "final"
+            result = run_analysis([str(source)], str(final), opportunity_review_path=str(review))
+            self.assertEqual(result["raw_record_count"], 1)
+            self.assertEqual(self._read_summary(final / "analysis_summary.json")["manual_opportunity_rows_applied"], len(rows))
+
     def _write_jsonl(self, path, rows):
         path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
 

@@ -5,6 +5,7 @@ import csv
 import json
 from pathlib import Path
 import sqlite3
+import tempfile
 from typing import Iterator
 
 from .schema import ReviewRecord, stable_hash
@@ -13,7 +14,7 @@ from .schema import ReviewRecord, stable_hash
 CSV_COLUMNS = [
     "source", "content_type", "url", "external_id", "parent_id", "title", "body", "content_completeness",
     "author_hash", "published_at", "captured_at", "language", "score", "reply_count",
-    "rating", "is_official", "metadata",
+    "rating", "is_official", "metadata", "csv_escaped_fields",
 ]
 
 
@@ -211,25 +212,40 @@ class ReviewStore:
     def export_jsonl(self, path: str | Path) -> Path:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("w", encoding="utf-8") as handle:
-            for record in self.iter_records():
-                handle.write(json.dumps(record.as_dict(), ensure_ascii=False) + "\n")
+        with tempfile.NamedTemporaryFile(prefix=target.name + ".", suffix=".tmp", dir=target.parent, delete=False) as temporary:
+            pending = Path(temporary.name)
+        try:
+            with pending.open("w", encoding="utf-8") as handle:
+                for record in self.iter_records():
+                    handle.write(json.dumps(record.as_dict(), ensure_ascii=False) + "\n")
+            pending.replace(target)
+        finally:
+            pending.unlink(missing_ok=True)
         return target
 
     def export_csv(self, path: str | Path) -> Path:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("w", encoding="utf-8-sig", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS)
-            writer.writeheader()
-            for record in self.iter_records():
-                row = record.as_dict()
-                for field in ("metadata",):
-                    row[field] = json.dumps(row[field], ensure_ascii=False)
-                for field, value in row.items():
-                    if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")):
-                        row[field] = "'" + value
-                writer.writerow({column: row.get(column, "") for column in CSV_COLUMNS})
+        with tempfile.NamedTemporaryFile(prefix=target.name + ".", suffix=".tmp", dir=target.parent, delete=False) as temporary:
+            pending = Path(temporary.name)
+        try:
+            with pending.open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS)
+                writer.writeheader()
+                for record in self.iter_records():
+                    row = record.as_dict()
+                    for field in ("metadata",):
+                        row[field] = json.dumps(row[field], ensure_ascii=False)
+                    escaped_fields = []
+                    for field, value in row.items():
+                        if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")):
+                            row[field] = "'" + value
+                            escaped_fields.append(field)
+                    row["csv_escaped_fields"] = json.dumps(escaped_fields, ensure_ascii=False)
+                    writer.writerow({column: row.get(column, "") for column in CSV_COLUMNS})
+            pending.replace(target)
+        finally:
+            pending.unlink(missing_ok=True)
         return target
 
     def close(self) -> None:

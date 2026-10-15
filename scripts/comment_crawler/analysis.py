@@ -5,7 +5,9 @@ import csv
 import hashlib
 import json
 import re
+import shutil
 import sqlite3
+import tempfile
 import statistics
 import sys
 import unicodedata
@@ -199,7 +201,7 @@ def _read_sqlite(path: Path) -> list[dict[str, Any]]:
             except json.JSONDecodeError as exc:
                 raise ValueError(f"SQLite 第 {index} 条 payload_json 无效：{path}") from exc
             if not isinstance(payload, dict):
-                continue
+                raise ValueError(f"SQLite 第 {index} 条 payload_json 必须是对象：{path}")
             payload["_db_record_key"] = row["record_key"]
             output.append({"raw": payload, "source_file": str(path), "source_row": index})
         connection.close()
@@ -214,8 +216,24 @@ def _read_csv(path: Path) -> list[dict[str, Any]]:
         try:
             with path.open("r", encoding=encoding, newline="") as handle:
                 reader = csv.DictReader(handle)
-                return [{"raw": dict(row), "source_file": str(path), "source_row": index}
-                        for index, row in enumerate(reader, 2)]
+                output = []
+                for index, row in enumerate(reader, 2):
+                    raw = dict(row)
+                    marker = raw.pop("csv_escaped_fields", None)
+                    if marker is not None:
+                        try:
+                            escaped_fields = json.loads(marker)
+                        except json.JSONDecodeError as exc:
+                            raise ValueError(f"CSV 第 {index} 行转义标记无效：{path}") from exc
+                        if not isinstance(escaped_fields, list) or any(not isinstance(name, str) for name in escaped_fields):
+                            raise ValueError(f"CSV 第 {index} 行转义标记无效：{path}")
+                        for name in escaped_fields:
+                            value = raw.get(name)
+                            if not isinstance(value, str) or not value.startswith("'"):
+                                raise ValueError(f"CSV 第 {index} 行转义值与标记不一致：{path}")
+                            raw[name] = value[1:]
+                    output.append({"raw": raw, "source_file": str(path), "source_row": index})
+                return output
         except UnicodeDecodeError as exc:
             error = exc
     raise ValueError(f"无法识别 CSV 编码：{path} ({error})")
@@ -232,8 +250,9 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
                     raw = json.loads(line)
                 except json.JSONDecodeError as exc:
                     raise ValueError(f"JSONL 第 {index} 行不是合法 JSON：{path}") from exc
-                if isinstance(raw, dict):
-                    output.append({"raw": raw, "source_file": str(path), "source_row": index})
+                if not isinstance(raw, dict):
+                    raise ValueError(f"JSONL 第 {index} 行必须是对象：{path}")
+                output.append({"raw": raw, "source_file": str(path), "source_row": index})
     except UnicodeDecodeError as exc:
         raise ValueError(f"无法读取 JSONL 编码：{path}") from exc
     return output
@@ -1017,22 +1036,62 @@ def _opportunities(pain_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             confidence = item.get("manual_confidence_counts", {})
             evidence = "、".join(f"{level}{count}条" for level, count in sorted(confidence.items())) or "无法判断"
         output.append({
-            "product_opportunity": f"验证{item['label']}问题的影响与可行改进方向",
-            "user_problem": f"本数据集有 {item['mention_count']} 条{item['content_group']}评论提及该问题",
+            "pain_label": item["label"],
+            "content_group": item["content_group"],
+            "product_opportunity": "待逐项人工撰写",
+            "user_problem": f"{item['label']}：本数据集有 {item['mention_count']} 条{item['content_group']}评论提及",
             "related_scenario": "、".join(item.get("major_scenarios", ["未识别，需人工复核"])),
-            "product_implication": item.get("product_implication", "需人工结合证据确认"),
+            "product_implication": "待逐项人工填写",
             "comment_count": item["mention_count"],
             "mention_rate_pct": item["mention_rate_pct"],
             "denominator": item["denominator"],
             "severity_median": severity,
             "severity_level": item.get("severity_level", "无法判断"),
             "evidence_confidence": evidence,
-            "validation_method": "用情境访谈或任务测试验证问题是否复现及其对核心任务的影响",
-            "suggested_metrics": "任务完成率、完成时长、问题复现率；按实际问题选择",
-            "status": "规则候选，需人工复核" if item.get("rule_prelabel_count", 0) else "证据已复核，产品方向仍需验证",
+            "validation_method": "待逐项人工填写",
+            "suggested_metrics": "待逐项人工填写",
+            "status": "待逐项核对证据并撰写产品方向",
             "evidence_ids": item["evidence_ids"],
         })
     return output
+
+
+def _apply_opportunity_review(opportunities: list[dict[str, Any]], path_value: str | None) -> int:
+    if not path_value:
+        return 0
+    path = Path(path_value).expanduser().resolve()
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        required = {"pain_label", "content_group", "product_opportunity", "product_implication", "validation_method", "suggested_metrics", "evidence_ids"}
+        if not required.issubset(reader.fieldnames or []):
+            raise ValueError(f"产品机会复核表缺少字段：{', '.join(sorted(required - set(reader.fieldnames or [])))}")
+        reviewed = {}
+        for line, row in enumerate(reader, 2):
+            key = (row["pain_label"], row["content_group"])
+            if key in reviewed:
+                raise ValueError(f"产品机会复核表第 {line} 行重复：{key}")
+            reviewed[key] = row
+    count = 0
+    for opportunity in opportunities:
+        row = reviewed.pop((opportunity["pain_label"], opportunity["content_group"]), None)
+        if row is None:
+            raise ValueError(f"产品机会复核表缺少当前痛点：{opportunity['pain_label']}")
+        try:
+            reviewed_evidence = json.loads(row["evidence_ids"])
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"产品机会证据 ID 格式无效：{opportunity['pain_label']}") from exc
+        if reviewed_evidence != opportunity["evidence_ids"]:
+            raise ValueError(f"产品机会证据 ID 与当前分析不一致：{opportunity['pain_label']}")
+        fields = ("product_opportunity", "product_implication", "validation_method", "suggested_metrics")
+        if not all(row[field].strip() and not row[field].startswith("待逐项") for field in fields):
+            raise ValueError(f"产品机会复核表尚未逐项填写：{opportunity['pain_label']}")
+        for field in fields:
+            opportunity[field] = row[field].strip()
+        opportunity["status"] = "人工撰写，产品方向仍需验证"
+        count += 1
+    if reviewed:
+        raise ValueError(f"产品机会复核表含当前分析中不存在的痛点：{next(iter(reviewed))}")
+    return count
 
 
 def _evidence_index(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1275,7 +1334,7 @@ def _write_workbook(path: Path, rows: list[dict[str, Any]], summary: dict[str, A
 
 def run_analysis(input_values: list[str], output_value: str, product: str = "", brand: str = "",
                  near_duplicate_threshold: float = 0.9, annotations_path: str | None = None,
-                 analysis_scope: str = "all") -> dict[str, Any]:
+                 analysis_scope: str = "all", opportunity_review_path: str | None = None) -> dict[str, Any]:
     if not 0.5 <= near_duplicate_threshold <= 1:
         raise ValueError("近似重复阈值必须在 0.5 到 1 之间")
     if analysis_scope not in {"all", "verified-target"}:
@@ -1339,6 +1398,7 @@ def run_analysis(input_values: list[str], output_value: str, product: str = "", 
     sentiment_rows = _sentiment_metrics(analysis_rows)
     time_rows = _time_metrics(analysis_rows)
     opportunities = _opportunities(pain_rows)
+    opportunity_reviewed_count = _apply_opportunity_review(opportunities, opportunity_review_path)
     experience_pain_rows = _experience_pain_metrics(analysis_rows)
     review_rows = [row for row in rows if row["is_included"] == "review" or row["review_status"]]
     evidence_rows = _evidence_index(analysis_valid)
@@ -1351,43 +1411,50 @@ def run_analysis(input_values: list[str], output_value: str, product: str = "", 
     summary["analysis_denominator_count"] = len(analysis_valid)
     summary["analysis_denominator_by_content_group"] = dict(Counter(row["content_group"] for row in analysis_valid))
     summary["manual_annotation_rows_applied"] = annotation_reviewed_count
+    summary["manual_opportunity_rows_applied"] = opportunity_reviewed_count
     summary["verified_target_filtered_out_count"] = max(0, summary["valid_deduplicated_comment_count"] - len(analysis_valid))
     summary["rule_prelabel_count_in_analysis_denominator"] = sum(row["annotation_status"] != "manual_reviewed" for row in analysis_valid)
     summary["report_class"] = ("verified_target_human_reviewed" if analysis_scope == "verified-target" else
                                "exploratory_with_rule_prelabels" if summary["rule_prelabel_count_in_analysis_denominator"] else
                                "all_comments_with_manual_annotations")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    cleaned_rows = [{field: row.get(field, "") for field in OUTPUT_FIELDS} for row in rows]
-    _write_csv(output_dir / "cleaned_comments.csv", cleaned_rows, OUTPUT_FIELDS)
-    with (output_dir / "cleaned_comments.jsonl").open("w", encoding="utf-8") as handle:
-        for row in cleaned_rows:
-            handle.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
-    pain_fields = ["source_scope", "content_group", "label", "mention_count", "denominator", "mention_rate_pct",
-                   "author_count", "author_id_missing_count", "source_coverage_count", "source_coverage_missing_count",
-                   "severity_median", "severity_level", "severity_evaluable_count", "high_severity_count", "high_severity_rate_pct",
-                   "manual_reviewed_count", "rule_prelabel_count", "major_scenarios", "evidence_ids"]
-    _write_csv(output_dir / "pain_points.csv", pain_rows, pain_fields)
-    opportunity_fields = ["product_opportunity", "user_problem", "related_scenario", "product_implication", "comment_count", "mention_rate_pct",
-                          "denominator", "severity_median", "severity_level", "evidence_confidence", "validation_method", "suggested_metrics", "status", "evidence_ids"]
-    _write_csv(output_dir / "opportunities.csv", opportunities, opportunity_fields)
-    review_fields = ["analysis_record_key", "comment_id", "source", "content_group", "source_file", "source_row",
-                     "annotation_status", "product_relevance", "confidence", "review_status", "is_included",
-                     "exclusion_reason", "duplicate_group_id", "duplicate_type", "text_original", "evidence_note"]
-    _write_csv(output_dir / "review_queue.csv", review_rows, review_fields)
-    evidence_fields = ["label_type", "label", "source", "content_type", "content_group", "annotation_status",
-                       "product_relevance", "analysis_record_key", "comment_reference", "evidence_preview",
-                       "source_url", "source_file", "source_row", "severity"]
-    _write_csv(output_dir / "evidence_index.csv", evidence_rows, evidence_fields)
-    summary.update({"pain_points": pain_rows, "topics": topic_rows, "scenarios": scenario_rows,
-                    "purchase_barriers": barrier_rows, "positive_topics": positive_rows,
-                    "sentiment": sentiment_rows, "monthly_trends": time_rows,
-                    "pain_points_by_experience": experience_pain_rows, "opportunities": opportunities})
-    (output_dir / "analysis_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
-    report = _build_report(summary, pain_rows, topic_rows, scenario_rows, barrier_rows, positive_rows,
-                           sentiment_rows, time_rows, experience_pain_rows, opportunities, review_rows)
-    (output_dir / "analysis_report.md").write_text(report, encoding="utf-8")
-    workbook_created = _write_workbook(output_dir / "analysis_report.xlsx", cleaned_rows, summary, pain_rows, review_rows)
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.", dir=output_dir.parent))
+    try:
+        cleaned_rows = [{field: row.get(field, "") for field in OUTPUT_FIELDS} for row in rows]
+        _write_csv(staging_dir / "cleaned_comments.csv", cleaned_rows, OUTPUT_FIELDS)
+        with (staging_dir / "cleaned_comments.jsonl").open("w", encoding="utf-8") as handle:
+            for row in cleaned_rows:
+                handle.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+        pain_fields = ["source_scope", "content_group", "label", "mention_count", "denominator", "mention_rate_pct",
+                       "author_count", "author_id_missing_count", "source_coverage_count", "source_coverage_missing_count",
+                       "severity_median", "severity_level", "severity_evaluable_count", "high_severity_count", "high_severity_rate_pct",
+                       "manual_reviewed_count", "rule_prelabel_count", "major_scenarios", "evidence_ids"]
+        _write_csv(staging_dir / "pain_points.csv", pain_rows, pain_fields)
+        opportunity_fields = ["pain_label", "content_group", "product_opportunity", "user_problem", "related_scenario", "product_implication", "comment_count", "mention_rate_pct",
+                              "denominator", "severity_median", "severity_level", "evidence_confidence", "validation_method", "suggested_metrics", "status", "evidence_ids"]
+        _write_csv(staging_dir / "opportunities.csv", opportunities, opportunity_fields)
+        review_fields = ["analysis_record_key", "comment_id", "source", "content_group", "source_file", "source_row",
+                         "annotation_status", "product_relevance", "confidence", "review_status", "is_included",
+                         "exclusion_reason", "duplicate_group_id", "duplicate_type", "text_original", "evidence_note"]
+        _write_csv(staging_dir / "review_queue.csv", review_rows, review_fields)
+        evidence_fields = ["label_type", "label", "source", "content_type", "content_group", "annotation_status",
+                           "product_relevance", "analysis_record_key", "comment_reference", "evidence_preview",
+                           "source_url", "source_file", "source_row", "severity"]
+        _write_csv(staging_dir / "evidence_index.csv", evidence_rows, evidence_fields)
+        summary.update({"pain_points": pain_rows, "topics": topic_rows, "scenarios": scenario_rows,
+                        "purchase_barriers": barrier_rows, "positive_topics": positive_rows,
+                        "sentiment": sentiment_rows, "monthly_trends": time_rows,
+                        "pain_points_by_experience": experience_pain_rows, "opportunities": opportunities})
+        (staging_dir / "analysis_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
+        report = _build_report(summary, pain_rows, topic_rows, scenario_rows, barrier_rows, positive_rows,
+                               sentiment_rows, time_rows, experience_pain_rows, opportunities, review_rows)
+        (staging_dir / "analysis_report.md").write_text(report, encoding="utf-8")
+        workbook_created = _write_workbook(staging_dir / "analysis_report.xlsx", cleaned_rows, summary, pain_rows, review_rows)
+        staging_dir.replace(output_dir)
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
     return {"output_dir": str(output_dir), "raw_record_count": raw_count,
             "valid_deduplicated_comment_count": summary["valid_deduplicated_comment_count"],
             "analysis_denominator_count": summary["analysis_denominator_count"],
@@ -1406,6 +1473,7 @@ def build_parser() -> Any:
     parser.add_argument("--brand", default="", help="分析目标品牌；不覆盖记录字段，也不自动过滤评论")
     parser.add_argument("--near-duplicate-threshold", type=float, default=0.9, help="近似重复文本 Jaccard 阈值，默认 0.9")
     parser.add_argument("--annotations", help="人工复核 CSV；可直接使用并编辑此前输出的 cleaned_comments.csv")
+    parser.add_argument("--opportunity-review", help="逐项填写产品机会后的 opportunities.csv；会核对痛点与证据 ID")
     parser.add_argument("--scope", choices=("all", "verified-target"), default="all",
                         help="all 为全体有效评论探索；verified-target 仅统计人工确认相关的评论")
     return parser
@@ -1415,7 +1483,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         result = run_analysis(args.input, args.output, args.product, args.brand, args.near_duplicate_threshold,
-                              args.annotations, args.scope)
+                              args.annotations, args.scope, args.opportunity_review)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if not result["workbook_created"]:
             print("未生成 XLSX；如需工作簿，请安装 analysis extra：pip install '.[analysis]'", file=sys.stderr)

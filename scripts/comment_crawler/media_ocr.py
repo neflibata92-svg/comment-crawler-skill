@@ -53,8 +53,14 @@ def process_media_assets(
     profile_directory: str | Path | None = None,
 ) -> dict[str, Any]:
     """Return video paths and OCR text; image files are removed only after text is persisted."""
+    if media_dir.is_symlink():
+        raise ValueError("媒体目录不得为符号链接")
     media_dir = media_dir.resolve()
     data_root = data_root.resolve()
+    if media_dir == data_root or not media_dir.is_relative_to(data_root):
+        raise ValueError("媒体目录超出任务目录")
+    if media_dir.is_dir() and any(path.is_symlink() for path in media_dir.rglob("*")):
+        raise ValueError("媒体目录包含符号链接文件")
     video_files = sorted(
         path for path in media_dir.rglob("*")
         if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES

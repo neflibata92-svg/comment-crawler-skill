@@ -54,6 +54,7 @@ license: MIT
 - 用户只要求分析已保存的评论时，不运行 `collect`；改用配套的 [评论量化分析 skill](comment-quant-analysis/SKILL.md)，并按其方法参考执行。
 - 本仓库 CLI 已提供 `analyze` 子命令。仅当用户明确指定采集任务或文件后，才运行 `python /技能根目录/scripts/crawl.py analyze --input /用户指定的任务目录 --output /新的分析目录`；`--product`、`--brand` 只登记分析目标，不会覆盖记录里的品牌，也不会自动筛选相关评论。命令离线只读输入，并要求输出目录为空。
 - 首轮默认 `--scope all` 仅用于探索性规则预标注。需要对目标产品出正式量化报告时，应逐条复核 `cleaned_comments.csv` 中的有效性、`product_relevance` 和标签，标记 `annotation_status=manual_reviewed`，然后以 `--annotations` 和 `--scope verified-target` 重新分析；最终 N 只包括人工确认相关且纳入的评论。
+- 产品机会表初始仅为证据候选。逐项核对 `evidence_index.csv`，填写 `opportunities.csv` 的产品方向、产品含义、验证方法和观察指标；用 `--opportunity-review` 重新分析并核对当前痛点与证据 ID。未完成时不得把候选机会写成已验证建议。
 - 严重程度仅汇总人工标注分值，购买意向不自动判为购买障碍。报告正文引用受长度限制时，使用 `evidence_index.csv` 查全量证据。
 - 输入是本仓库采集结果时，还要读取 `comment-quant-analysis/references/crawler-data-map.md`，正确区分 `external_id`、合成 ID、`content_type`、`parent_id`、`author_hash` 和运行报告。
 - 用户明确要求“采集并分析”时，先按本 skill 完成已授权采集，再只分析用户指定的任务目录。SQLite、CSV、JSONL 是同一批记录的不同表示，不得重复合并计数；不同任务和后端默认分开。

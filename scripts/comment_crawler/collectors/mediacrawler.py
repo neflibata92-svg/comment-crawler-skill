@@ -70,6 +70,23 @@ MEDIA_DOWNLOAD_ID_BATCH_SIZE = 100
 MEDIA_DOWNLOAD_PLATFORMS = {"douyin", "bilibili", "weibo", "xiaohongshu"}
 
 
+def _safe_post_id(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9_-]+", value))
+
+
+def _safe_media_dir(data_root: Path, platform_code: str, post_id: str) -> Path:
+    if not _safe_post_id(post_id):
+        raise ValueError(f"帖子 ID 含不安全路径字符：{post_id!r}")
+    platform_root = data_root / platform_code
+    media_root = platform_root / "media"
+    media_dir = media_root / post_id
+    if any(path.is_symlink() for path in (data_root, platform_root, media_root, media_dir)):
+        raise ValueError(f"媒体路径包含符号链接：{post_id!r}")
+    if media_dir.resolve().parent != media_root.resolve() or media_root.resolve().parent != platform_root.resolve():
+        raise ValueError(f"媒体路径超出预期目录：{post_id!r}")
+    return media_dir
+
+
 def _media_download_support(home: Path, source: str) -> tuple[bool, str]:
     if source not in MEDIA_DOWNLOAD_PLATFORMS:
         return False, "not_supported_by_adapter"
@@ -101,6 +118,8 @@ def download_media_for_posts(
     data_root = Path(output).expanduser().resolve() / ".mediacrawler"
     data_root.mkdir(parents=True, exist_ok=True)
     unique_post_ids = list(dict.fromkeys(str(post_id) for post_id in post_ids if str(post_id)))
+    for post_id in unique_post_ids:
+        _safe_media_dir(data_root, code, post_id)
     if not unique_post_ids:
         return {"status": "no_posts", "download_requested": False, "return_code": None}
     failed_status = ""
@@ -446,16 +465,14 @@ def _platform_exports(root: Path, platform_code: str, item_type: str) -> list[Pa
 
 
 def _matching_post_ids(data_root: Path, spec: dict[str, Any], queries: list[str]) -> list[str]:
-    post_ids: list[str] = []
-    seen: set[str] = set()
+    latest_rows: dict[str, dict[str, Any]] = {}
     scratch_result = CollectionResult(source="mediacrawler")
     for path in _platform_exports(data_root, spec["code"], "contents"):
         for row in _iter_jsonl(path, scratch_result, report_invalid=False):
             post_id = clean_text(row.get(spec["post_id"]))
-            if post_id and post_id not in seen and _matches_search_queries(row, spec, queries):
-                seen.add(post_id)
-                post_ids.append(post_id)
-    return post_ids
+            if post_id:
+                latest_rows[post_id] = row
+    return [post_id for post_id, row in latest_rows.items() if _matches_search_queries(row, spec, queries)]
 
 
 def _remove_unmatched_media(
@@ -483,7 +500,7 @@ def _remove_unmatched_media(
         result.warnings.append("媒体目录与任务目录相同，跳过未命中媒体清理")
         return
     for post_id in candidate_post_ids - matched_post_ids:
-        if post_id in {".", ".."} or Path(post_id).name != post_id:
+        if not _safe_post_id(post_id):
             result.warnings.append(f"未清理无效帖子 ID 对应的媒体路径：{post_id}")
             continue
         media_dir = media_root / post_id
@@ -513,58 +530,69 @@ def _import_exports(
     content_files = _platform_exports(data_root, spec["code"], "contents")
     comment_files = _platform_exports(data_root, spec["code"], "comments")
     posts: dict[str, tuple[str, str]] = {}
-    seen_post_ids: set[str] = set()
     candidate_post_ids: set[str] = set()
+    latest_posts: dict[str, dict[str, Any]] = {}
     for path in content_files:
         for row in _iter_jsonl(path, result):
             candidate_id = clean_text(row.get(spec["post_id"]))
             if candidate_id:
                 candidate_post_ids.add(candidate_id)
-            record, raw_id = _post_record(source, spec, row)
-            if record is None:
+                latest_posts[candidate_id] = row
+            else:
                 result.warnings.append(f"上游帖子缺少平台 ID，已跳过：{path.name}")
-                continue
-            if raw_id in seen_post_ids:
-                continue
-            if not _matches_search_queries(row, spec, queries):
-                continue
-            seen_post_ids.add(raw_id)
-            media_dir = data_root / spec["code"] / "media" / raw_id
-            record.metadata["media_assets"] = process_media_assets(
-                media_dir, data_root, f"{spec['code']}:{raw_id}",
-                download_requested=media_request_status == "requested",
-                request_status=media_request_status,
-                video_url=record.url if source in MEDIA_DOWNLOAD_PLATFORMS else "",
-                web_video_session=web_video_session,
-                profile_directory=profile_directory,
+    for raw_id, row in latest_posts.items():
+        if not _matches_search_queries(row, spec, queries):
+            continue
+        record, _ = _post_record(source, spec, row)
+        if record is None:
+            continue
+        try:
+            media_dir = _safe_media_dir(data_root, spec["code"], raw_id)
+        except ValueError as exc:
+            result.warnings.append(str(exc))
+            continue
+        record.metadata["media_assets"] = process_media_assets(
+            media_dir, data_root, f"{spec['code']}:{raw_id}",
+            download_requested=media_request_status == "requested",
+            request_status=media_request_status,
+            video_url=record.url if source in MEDIA_DOWNLOAD_PLATFORMS else "",
+            web_video_session=web_video_session,
+            profile_directory=profile_directory,
+        )
+        if record.metadata["media_assets"]["image_ocr_status"] in {"unavailable", "partial"}:
+            result.warnings.append(
+                f"帖子 {raw_id} 的图片 OCR 未全部完成；未成功提取的图片已保留，安装本机 OCR 依赖后可重试"
             )
-            if record.metadata["media_assets"]["image_ocr_status"] in {"unavailable", "partial"}:
-                result.warnings.append(
-                    f"帖子 {raw_id} 的图片 OCR 未全部完成；未成功提取的图片已保留，安装本机 OCR 依赖后可重试"
-                )
-            video_analysis = record.metadata["media_assets"]["video_analysis"]
-            if video_analysis["status"] in {"unavailable", "partial"}:
-                if video_analysis.get("mode") == "web_page":
-                    reason = "没有可用视频文件，网页播放取帧 OCR 未完成；检查浏览器登录、Playwright、播放器和 OCR 依赖"
-                else:
-                    reason = "视频帧 OCR 未全部完成，源视频已保留；检查 FFmpeg、Tesseract 和 OCR 语言数据后可重试"
-                result.warnings.append(f"帖子 {raw_id}：{reason}")
-            posts[raw_id] = (record.url, record.title)
-            emit(record)
+        video_analysis = record.metadata["media_assets"]["video_analysis"]
+        if video_analysis["status"] in {"unavailable", "partial"}:
+            if video_analysis.get("mode") == "web_page":
+                reason = "没有可用视频文件，网页播放取帧 OCR 未完成；检查浏览器登录、Playwright、播放器和 OCR 依赖"
+            else:
+                reason = "视频帧 OCR 未全部完成，源视频已保留；检查 FFmpeg、Tesseract 和 OCR 语言数据后可重试"
+            result.warnings.append(f"帖子 {raw_id}：{reason}")
+        posts[raw_id] = (record.url, record.title)
+        emit(record)
 
     _remove_unmatched_media(data_root, spec["code"], candidate_post_ids, set(posts), result)
 
     imported_comments = 0
-    seen_comments: dict[str, set[str]] = {}
     accepted_root_ids: dict[str, set[str]] = {}
 
     def comment_rows(*, report_invalid: bool = True):
         for path in comment_files:
             yield from _iter_jsonl(path, result, report_invalid=report_invalid)
 
+    # Later exports supersede earlier rows with the same stable comment ID.
+    latest_comments: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in comment_rows():
+        post_id = clean_text(row.get(spec["comment_parent"]))
+        comment_id = clean_text(row.get("comment_id"))
+        key = (post_id, comment_id or stable_hash(json.dumps(row, ensure_ascii=False, sort_keys=True)))
+        latest_comments[key] = row
+
     # Import every top-level comment first so replies are not lost when the
     # upstream JSONL happens to write a reply before its parent row.
-    for row in comment_rows():
+    for row in latest_comments.values():
         post_id = clean_text(row.get(spec["comment_parent"]))
         if post_id not in posts:
             continue
@@ -575,10 +603,6 @@ def _import_exports(
         if record is None:
             continue
         record.metadata["comment_level"] = 1
-        post_seen = seen_comments.setdefault(post_id, set())
-        if record.external_id in post_seen:
-            continue
-        post_seen.add(record.external_id)
         comment_id = clean_text(row.get("comment_id"))
         if comment_id:
             accepted_root_ids.setdefault(post_id, set()).add(comment_id)
@@ -589,7 +613,7 @@ def _import_exports(
     # The shared result model stores the first two comment levels. Deeper
     # descendants are not silently mislabeled as second-level replies.
     orphan_replies = 0
-    for row in comment_rows(report_invalid=False):
+    for row in latest_comments.values():
         post_id = clean_text(row.get(spec["comment_parent"]))
         if post_id not in posts:
             continue
@@ -603,10 +627,6 @@ def _import_exports(
         if record is None:
             continue
         record.metadata["comment_level"] = 2
-        post_seen = seen_comments.setdefault(post_id, set())
-        if record.external_id in post_seen:
-            continue
-        post_seen.add(record.external_id)
         emit(record)
         imported_comments += 1
 
