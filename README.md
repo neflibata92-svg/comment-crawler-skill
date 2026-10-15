@@ -1,5 +1,7 @@
 # Comment Crawler Skill
 
+**维护者：Neflibata**
+
 中文优先的多平台帖子与评论采集 Skill，也可作为独立 Python CLI 使用。覆盖淘宝／天猫、京东、Kickstarter、Reddit、YouTube、小红书，以及通过外置 MediaCrawler 接入的抖音、B站、微博、知乎和贴吧。关键词由使用者指定，没有内置品牌过滤；采集器不设置帖子或评论的本地总量截断。记录逐条写入 SQLite，可导出 CSV、JSONL，并报告覆盖限制与失败原因。
 
 **先选入口：** YouTube 使用 Data API key；Reddit 推荐 OAuth，也可使用已登录 Chrome 中的 OpenCLI；淘宝／天猫、京东和小红书使用用户手动登录的专用浏览器档案；Kickstarter 从公开项目页进入；抖音、B站、微博、知乎和贴吧通过单独准备的 MediaCrawler checkout 运行。采集器不设帖子或评论总量上限，但平台分页、可见范围、权限、配额及个别上游入口能力仍会限制结果；分页结束不代表平台全量。
@@ -92,7 +94,7 @@ comment-crawler collect xiaohongshu --query '相机体验' --profile ~/Library/A
 
 ## 抖音、B站、微博、知乎和贴吧
 
-五个平台通过单独安装在仓库外的 MediaCrawler checkout 运行。本仓库不包含其源代码。请先按其说明安装依赖，并设置 `MEDIACRAWLER_HOME`；首次使用前运行准备命令，关闭上游默认的 CDP 和已识别的反检测脚本注入，并让知乎分页接收评论读取范围。准备命令也会为小红书的可选媒体下载准备上游核心文件。该命令会在外置 checkout 中备份并修改配置、六个平台核心文件及知乎评论客户端：
+五个平台通过单独安装在仓库外的 MediaCrawler checkout 运行。本仓库另含 [五平台参考源码快照](references/mediacrawler-source/)，只用于查看本项目适配对应的上游实现，不完整、不可独立运行，也不会被采集器导入。实际运行仍需按上游说明在仓库外安装依赖并设置 `MEDIACRAWLER_HOME`；首次使用前运行准备命令，关闭上游默认的 CDP 和已识别的反检测脚本注入，并让知乎分页接收评论读取范围。准备命令也会为小红书的可选媒体下载准备上游核心文件。该命令会在外置 checkout 中备份并修改配置、六个平台核心文件及知乎评论客户端：
 
 ```bash
 export MEDIACRAWLER_HOME=/path/to/MediaCrawler
@@ -104,7 +106,7 @@ comment-crawler collect zhihu --query '产品关键词' --output ./runs/zhihu-te
 comment-crawler collect tieba --query '产品关键词' --output ./runs/tieba-test
 ```
 
-首次采集时由用户在可见浏览器中自行登录和处理正常登录流程。搜索模式只导入平台搜索结果中标题或正文命中至少一个完整搜索词的帖子及其评论，匹配时忽略大小写并归一空白；帖子和评论不设本地总量上限。默认读取一级评论和二级回复，更深层后代不进入统一评论表。平台分页、可见范围、账号权限和配额仍可能限制实际结果。遇到验证码、访问拒绝或限流时停止任务，不尝试绕过。使用 `--target` 进入指定内容详情模式；同一任务目录只能绑定相同来源和入口。MediaCrawler 采用独立的非商业学习许可，使用者须遵守其许可与平台规则；本仓库不会重新发布其代码。详细字段、准备及恢复说明见 [MediaCrawler 平台指南](references/mediacrawler.md)。
+首次采集时由用户在可见浏览器中自行登录和处理正常登录流程。搜索模式只导入平台搜索结果中标题或正文命中至少一个完整搜索词的帖子及其评论，匹配时忽略大小写并归一空白；帖子和评论不设本地总量上限。默认读取一级评论和二级回复，更深层后代不进入统一评论表。平台分页、可见范围、账号权限和配额仍可能限制实际结果。遇到验证码、访问拒绝或限流时停止任务，不尝试绕过。使用 `--target` 进入指定内容详情模式；同一任务目录只能绑定相同来源和入口。MediaCrawler 快照附带自己的非商业学习许可；根目录 MIT 许可不覆盖该上游代码。详细字段、准备及恢复说明见 [MediaCrawler 平台指南](references/mediacrawler.md)。
 
 MediaCrawler 搜索模式先按标题和正文筛选，再为所有命中帖子的 ID 分批请求抖音、B站和微博媒体。分批只限制单次命令的 ID 数，不截断命中 ID 总数。小红书仍由本仓库采集评论；可通过 `--mediacrawler-home` 或 `MEDIACRAWLER_HOME` 让 MediaCrawler 为已采集笔记下载视频。
 

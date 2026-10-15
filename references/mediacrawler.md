@@ -1,6 +1,6 @@
 # MediaCrawler 五平台评论与四平台媒体接入指南
 
-评论采集适用于抖音、B站、微博、知乎和贴吧；媒体下载适用于抖音、B站、微博和小红书。仓库只包含适配代码，不包含 MediaCrawler 源码；运行时需要用户单独取得的外置 checkout 和该项目依赖。
+评论采集适用于抖音、B站、微博、知乎和贴吧；媒体下载适用于抖音、B站、微博和小红书。本仓库包含 [`references/mediacrawler-source/`](mediacrawler-source/) 下固定上游提交的五平台局部源码快照，仅供参考；缺少 MediaCrawler 公共模块，不可独立安装或运行。采集器不会导入这份快照，运行时仍需要用户单独安装的外置 checkout 和该项目依赖。快照来源、具体修改及单独适用的上游许可证见其 [README](mediacrawler-source/README.md)、[NOTICE](mediacrawler-source/NOTICE.md) 和 `LICENSE`。
 
 ## 准备外置 checkout
 

@@ -9,12 +9,13 @@
 | collectors/reddit.py | memomind_crawler/collectors/reddit.py | 搜索分页、更多评论展开、sink 写入 |
 | collectors/reddit_opencli.py | memomind_crawler/collectors/reddit_opencli.py | 独立 source、移除产品过滤、保留后端限制提示 |
 | collectors/xiaohongshu.py | 本仓库新写；参考 OpenCLI 的公开页面选择器和 xiaohongshu-mcp 的评论展开说明 | 普通 Playwright 页面读取、关键词和笔记链接；按笔记检查点续跑、去重并报告字段质量；未复制第三方源码 |
-| collectors/mediacrawler.py | MediaCrawler 外置 checkout 的命令行 JSONL 输出与字段模型 | 仅调用用户单独取得的源码；帖子与评论不设本地总量上限；搜索结果帖子需在标题或正文命中搜索词；导入一级和二级评论；在可用的平台请求媒体文件；不复制上游源码 |
+| collectors/mediacrawler.py | MediaCrawler 外置 checkout 的命令行 JSONL 输出与字段模型 | 调用用户单独安装的源码；帖子与评论不设本地总量上限；搜索结果帖子需在标题或正文命中搜索词；导入一级和二级评论；在可用的平台请求媒体文件 |
+| references/mediacrawler-source/ | [NanmiCoder/MediaCrawler](https://github.com/NanmiCoder/MediaCrawler)，固定提交 `19c956c962726f5ba6de338a04f82e6c4716b054` | 五平台顶层 Python 源文件的局部参考快照；按本仓库准备逻辑修改浏览器配置与五个平台核心文件、清理抖音空白行尾随空格，并修改知乎分页；随附原始上游 LICENSE，不参与运行 |
 | video_analysis.py | FFmpeg、Pillow 与可选 faster-whisper 本地处理 | 不联网调用模型；保留输入视频，生成关键帧、联系表、音频转写和分析提纲 |
 | core | memomind_crawler/core | 去掉产品主题推断，保留字段、幂等 upsert 和导出 |
 | Skill 文档 | 本地方法参考及本次源码核对 | 按平台分层、明确权限／覆盖／验证状态 |
 
-没有复制 MediaCrawler 的源代码、真实评论、账号档案或历史 Git 提交。MediaCrawler 通过用户外置 checkout 和其自己的 Python 环境运行；`prepare-mediacrawler` 仅在用户指定目录修改浏览器配置、五个平台核心文件及知乎评论客户端，并为原文件建立 `.comment-crawler.bak` 备份。该外部项目的许可仍单独适用，见 [MediaCrawler LICENSE](https://github.com/NanmiCoder/MediaCrawler/blob/main/LICENSE)。MIT 仅覆盖本仓库代码与文档，不能替代平台访问授权或数据使用许可。
+本仓库包含基于上述固定提交重建的五平台局部参考源码，不是用户缺失的外置优化 checkout，也不是完整可运行版本。未复制真实评论、账号档案、Cookie、媒体、依赖环境或测试夹具。实际采集仍通过用户在仓库外安装的 checkout 及其 Python 环境运行；`prepare-mediacrawler` 只在用户指定目录修改配置、六个平台核心文件及知乎评论客户端，并为原文件建立 `.comment-crawler.bak` 备份。参考快照的 `LICENSE` 与上游项目许可单独适用；根目录 MIT 仅覆盖本仓库自己的代码与文档，不能替代平台访问授权或数据使用许可。维护者署名为 Neflibata；MediaCrawler 上游作者与版权声明保留在参考目录的 `NOTICE.md` 和 `LICENSE` 中。
 
 本版本不包含人工导入、媒体测评、历史产品数据或原环境配置。原始项目保留在作者本机，发布仓库独立历史。
 
