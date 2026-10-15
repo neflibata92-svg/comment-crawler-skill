@@ -98,11 +98,11 @@
 - Consumes: current four remote branch tips plus the local snapshot commit.
 - Produces: rewritten branches where all commits have the Neflibata author identity; committer metadata remains intact.
 
-- [ ] Create a disposable mirror from `origin`, record the four original branch SHAs, and fetch the local snapshot commit object into the mirror.
-- [ ] Advance only the mirror's `feature/mediacrawler-platforms` ref to the local snapshot commit.
-- [ ] Use built-in `git filter-branch --env-filter` in the mirror to change only author name/email across all refs; do not install new dependencies.
-- [ ] Verify the result has 21 commits, four expected branch names, a single author identity, and unchanged trees/messages/author dates for all 20 prior commits; verify the added snapshot commit has the Neflibata identity.
-- [ ] If any remote head differs from the recorded original SHA, stop before pushing and report the changed ref.
+- [x] Create a disposable mirror from `origin`, record the four original branch SHAs, and fetch the local snapshot commit object into the mirror.
+- [x] Advance only the mirror's `feature/mediacrawler-platforms` ref to the local snapshot commit.
+- [x] Use built-in `git filter-branch --env-filter` in the mirror to change author name/email across all four heads; do not install new dependencies. The 13 prior GPG signature headers were removed as approved.
+- [x] Verify the result has 21 commits, four expected branch names, a single author identity, and unchanged trees/messages/committer metadata/author dates for all 20 prior commits; verify the added snapshot commit has the Neflibata identity.
+- [x] Refresh remote heads and confirm they still match the recorded original SHAs before pushing.
 
 ### Task 5: Push and verify GitHub refs
 
@@ -113,7 +113,9 @@
 - Consumes: verified rewritten mirror and original remote SHAs.
 - Produces: four updated GitHub branches and a synchronized local feature checkout.
 
-- [ ] Push all four rewritten refs with explicit `--force-with-lease=refs/heads/<branch>:<original-sha>` guards.
-- [ ] Verify remote branch heads match the rewritten local refs and GitHub reports the author account for the new snapshot commit.
-- [ ] Fetch rewritten branches into the current workspace and synchronize local branch refs without discarding uncommitted work.
-- [ ] Run final `git status --short --branch`, `git diff --check`, and author-count checks across all resulting refs.
+- [x] Push all four rewritten refs with explicit `--force-with-lease=refs/heads/<branch>:<original-sha>` guards.
+- [x] Verify remote branch heads match the rewritten mirror; GitHub REST associates the snapshot commit with `neflibata92-svg` and reports author name `Neflibata`.
+- [x] Fetch rewritten branches into the current workspace and synchronize local branch refs without discarding uncommitted work. The separate comment-analysis worktree's untracked plan file was preserved.
+- [x] Run final `git status --short --branch`, `git diff --check`, and author-count checks across all resulting refs.
+
+The final verification and completed-plan record are committed as a separate Neflibata-authored follow-up after the 21-commit history rewrite; this keeps the rewritten source snapshot commit unchanged.
