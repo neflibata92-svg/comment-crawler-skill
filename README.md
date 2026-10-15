@@ -4,11 +4,11 @@
 
 中文优先的多平台帖子与评论采集 Skill，也可作为独立 Python CLI 使用。覆盖淘宝／天猫、京东、Kickstarter、Reddit、YouTube、小红书，以及通过外置 MediaCrawler 接入的抖音、B站、微博、知乎和贴吧。关键词由使用者指定，没有内置品牌过滤；采集器不设置帖子或评论的本地总量截断。记录逐条写入 SQLite，可导出 CSV、JSONL，并报告覆盖限制与失败原因。
 
-**先选入口：** YouTube 使用 Data API key；Reddit 推荐 OAuth，也可使用已登录 Chrome 中的 OpenCLI；淘宝／天猫、京东和小红书使用用户手动登录的专用浏览器档案；Kickstarter 从公开项目页进入；抖音、B站、微博、知乎和贴吧通过单独准备的 MediaCrawler checkout 运行。采集器不设帖子或评论总量上限，但平台分页、可见范围、权限、配额及个别上游入口能力仍会限制结果；分页结束不代表平台全量。
+**先选入口：** YouTube 使用 Data API key；Reddit 推荐 OAuth，也可使用已登录 Chrome 中的 OpenCLI；Amazon、淘宝／天猫、京东和小红书使用用户手动登录的专用浏览器档案；Kickstarter 从公开项目页进入；抖音、B站、微博、知乎和贴吧通过单独准备的 MediaCrawler checkout 运行。采集器不设帖子或评论总量上限，但平台分页、可见范围、权限、配额及个别上游入口能力仍会限制结果；分页结束不代表平台全量。
 
 **快速导航：** [安装](#安装) · [快速开始](#快速开始) · [MediaCrawler 五平台](#抖音b站微博知乎和贴吧) · [支持范围](#支持范围) · [输出与恢复](#输出与恢复) · [评论分析](#分析已有采集结果) · [开发验证](#开发验证)
 
-**v0.1.0 验证边界：** 2026-10-13 已在用户登录态用 `memomind` 做过一次小红书试采，用户中断了运行；结果与字段缺失见 [验收记录](VALIDATION.md)。这次试采不证明全量或后续页面结构仍然可用。其他平台的权限、配额和接口也需分别核实；“分页结束”不表示平台所有评论均可见。
+**v0.1.0 验证边界：** 2026-10-13 已在用户登录态用 `memomind` 做过一次小红书试采，用户中断了运行；结果与字段缺失见 [验收记录](VALIDATION.md)。这次试采不证明全量或后续页面结构仍然可用。Amazon 适配器目前只通过本地样本与字段测试，尚未完成真实商品页面验收。其他平台的权限、配额和接口也需分别核实；“分页结束”不表示平台所有评论均可见。
 
 ## 安装
 
@@ -80,6 +80,8 @@ comment-crawler collect jd --target 'https://item.jd.com/123456.html' --profile 
 
 检查目标后，去掉第二条命令的 `--dry-run` 即可开始。浏览器档案必须位于所有 Git 仓库之外；程序会拒绝仓库内路径。Reddit 两种入口的差异及各平台命令见下表和对应指南。
 
+Amazon 首版仅开放美国站适配，接受 10 位 ASIN 或 `amazon.com` 商品链接；其他国家站点会明确拒绝，逐站验证后才能加入。美国站真实页面仍待验收，详情见 [Amazon 指南](references/amazon.md)。
+
 小红书支持关键词和笔记链接两种入口。采集器分别保存页面可见的笔记标题、正文、匿名作者标识、发布时间和互动数，以及评论和楼中楼。用户在专用浏览器中自行完成登录；登录命令只检查页面是否显示拦截，真实搜索及评论权限仍需采集试运行确认：
 
 ```bash
@@ -129,11 +131,12 @@ API 也支持 `--config examples/config.json`；命令行参数覆盖同名配�
 | Reddit OpenCLI | 用户已登录 Chrome + 扩展 | 搜索仅单页，OpenCLI 最多 5 轮展开；明确标记 `backend_limited`，不下载视频 |
 | 淘宝／天猫 | 专用档案中由用户登录 | 采集商品评价；当前适配无用户回复树，追评单独放在元数据；6 轮无变化后标记 `stalled` |
 | 京东 | 专用档案中由用户登录 | 采集扁平商品评价；`afterUserReply` 等附加文本被合并进元数据，未建用户回复树；分页至空页并去重 |
+| Amazon 美国站 | 专用档案中由用户登录 | 商品标题与可见评价分页；评价图片在内存中 OCR，明确标示的商家回复保存为子记录；其他站点待验证 |
 | Kickstarter | 公开项目页 | 跟随下一页并保存返回的父 ID，未证明全部子回复覆盖；不下载视频文件 |
 | 小红书 | 专用档案中由用户自行登录；媒体下载需配置 MediaCrawler | 保存可见笔记字段、一级评论和楼中楼；连续六轮无新增后停止；可下载视频并在 OCR 后删除，缺少视频文件时网页截帧 OCR |
 | 抖音、B站、微博、知乎、贴吧 | 用户外置 MediaCrawler checkout；首次采集在可见浏览器中登录 | 帖子和评论均无本地总量截断；搜索结果需在帖子标题或正文命中搜索词。导入一级和二级评论。抖音、B站、微博请求媒体文件；视频帧和图片 OCR 完成后删除源媒体。重扫按 ID 去重，不保证精确游标续跑 |
 
-逐平台操作：[YouTube](references/youtube.md) · [Reddit](references/reddit.md) · [淘宝／天猫](references/taobao.md) · [京东](references/jd.md) · [Kickstarter](references/kickstarter.md) · [小红书](references/xiaohongshu.md) · [MediaCrawler 五平台](references/mediacrawler.md)
+逐平台操作：[YouTube](references/youtube.md) · [Reddit](references/reddit.md) · [Amazon](references/amazon.md) · [淘宝／天猫](references/taobao.md) · [京东](references/jd.md) · [Kickstarter](references/kickstarter.md) · [小红书](references/xiaohongshu.md) · [MediaCrawler 五平台](references/mediacrawler.md)
 
 人工导入、媒体文章、发布评论、私密社区和自动绕过验证不属于本包功能。程序只读评论，不自动登录或代用户完成验证。
 

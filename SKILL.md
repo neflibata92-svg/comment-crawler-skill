@@ -1,6 +1,6 @@
 ---
 name: comment-crawler
-description: Use when 用户需要采集、更新或检查淘宝/天猫、京东、Kickstarter、Reddit、YouTube、小红书、抖音、B站、微博、知乎或贴吧的帖子与评论，整理本地视频素材，或诊断分页和覆盖完整度；不用于发帖、账号操作代办、人工导入或泛化网页搜索。
+description: Use when 用户需要采集、更新或检查 Amazon、淘宝/天猫、京东、Kickstarter、Reddit、YouTube、小红书、抖音、B站、微博、知乎或贴吧的帖子与评论，整理本地视频素材，或诊断分页和覆盖完整度；不用于发帖、账号操作代办、人工导入或泛化网页搜索。
 license: MIT
 ---
 
@@ -17,6 +17,7 @@ license: MIT
    - [Reddit](references/reddit.md)：OAuth 或 OpenCLI 二选一；当前 OpenCLI 不支持全量搜索分页。
    - [淘宝／天猫](references/taobao.md)：专用浏览器登录、评论抽屉和追评。
    - [京东](references/jd.md)：专用浏览器登录、商品评论分页。
+   - [Amazon](references/amazon.md)：美国站商品链接或 ASIN、商品评价分页和图片 OCR；其他国家站待逐站验证。
    - [Kickstarter](references/kickstarter.md)：项目留言入口和回复关系局限。
    - [小红书](references/xiaohongshu.md)：专用浏览器登录、关键词或笔记链接；保存页面可见的笔记信息、评论与楼中楼，配置 MediaCrawler 后可下载视频并对图片做本地 OCR。
    - [MediaCrawler 五平台](references/mediacrawler.md)：抖音、B站、微博、知乎、贴吧评论采集，以及抖音、B站、微博、小红书媒体下载与图片 OCR 边界。

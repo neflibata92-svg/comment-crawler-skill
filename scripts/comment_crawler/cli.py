@@ -25,7 +25,7 @@ from .core.storage import QualitySummary, ReviewStore
 from .core.utils import CollectionResult, load_json, validate_browser_profile_path
 
 MEDIACRAWLER_SOURCES = ('douyin', 'bilibili', 'weibo', 'zhihu', 'tieba')
-SOURCES = ('youtube', 'reddit', 'reddit_opencli', 'taobao', 'jd', 'kickstarter', 'xiaohongshu', *MEDIACRAWLER_SOURCES)
+SOURCES = ('youtube', 'reddit', 'reddit_opencli', 'taobao', 'jd', 'amazon', 'kickstarter', 'xiaohongshu', *MEDIACRAWLER_SOURCES)
 
 
 def dispatch(source, config, output, emit):
@@ -42,6 +42,9 @@ def dispatch(source, config, output, emit):
     if source == 'xiaohongshu':
         from .collectors.xiaohongshu import collect_xiaohongshu
         return collect_xiaohongshu(config, crawl['delay_seconds'], emit)
+    if source == 'amazon':
+        from .collectors.amazon import collect_amazon
+        return collect_amazon(config, crawl['delay_seconds'], emit)
     if source in MEDIACRAWLER_SOURCES:
         from .collectors.mediacrawler import collect_mediacrawler
         return collect_mediacrawler(source, config, output, emit)
@@ -54,7 +57,7 @@ def parser():
     sub = root.add_subparsers(dest='command', required=True)
     sub.add_parser('doctor', help='离线检查依赖和凭据是否存在，不显示密钥')
     login = sub.add_parser('login', help='打开浏览器供用户自行登录')
-    login.add_argument('source', choices=('taobao', 'jd', 'xiaohongshu'))
+    login.add_argument('source', choices=('taobao', 'jd', 'amazon', 'xiaohongshu'))
     login.add_argument('--profile', required=True)
     collect = sub.add_parser('collect', help='运行单一平台／后端')
     collect.add_argument('source', choices=SOURCES)
@@ -164,6 +167,11 @@ def resolve_config(args):
             config['target'] = validate_note_url(str(config['target']))
         if not config.get('profile'):
             raise ValueError('小红书需要 --profile 指向自己的专用浏览器目录')
+    elif args.source == 'amazon':
+        from .collectors.amazon import validate_target
+        config['target'] = validate_target(str(config.get('target', '')))
+        if not config.get('profile'):
+            raise ValueError('Amazon 需要 --profile 指向自己的专用浏览器目录')
     elif args.source not in MEDIACRAWLER_SOURCES:
         from .collectors.browser import validate_target
         config['target'] = validate_target(args.source, str(config.get('target', '')))

@@ -221,7 +221,8 @@ def browser_collect(source: str, target: str, profile: str | None, delay: float,
 
 def login(source: str, profile: str) -> None:
     from playwright.sync_api import sync_playwright
-    url = {'jd': 'https://passport.jd.com/new/login.aspx', 'taobao': 'https://login.taobao.com'}[source]
+    url = {'jd': 'https://passport.jd.com/new/login.aspx', 'taobao': 'https://login.taobao.com',
+           'amazon': 'https://www.amazon.com/ap/signin'}[source]
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(validate_browser_profile_path(profile), headless=False)
         try:
