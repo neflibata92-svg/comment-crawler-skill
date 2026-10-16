@@ -73,7 +73,7 @@ comment-crawler collect bilibili --target 'https://www.bilibili.com/video/BV...'
 
 图片处理状态另存于 `image_ocr_status`，与视频 `status` 分开。`completed` 表示找到的图片已成功 OCR 并删除；`partial` 或 `unavailable` 表示至少有图片仍保留。图片 OCR 结果和文件名保存在 `image_ocr`；视频帧 OCR 状态、识别帧数量、删除状态和结果目录保存在 `video_analysis`。只有抽帧、每帧 OCR 及清单落盘成功后才删除源视频；失败时源视频保留。帧识别只覆盖采样帧，不能代表视频每一帧，也不包含语音转写。
 
-YouTube Data API 返回视频元数据和评论，但没有视频文件下载方法；如果用户已取得适用于该处理方式的 YouTube 书面批准，本适配器会对普通网页播放器截帧 OCR，不下载完整视频或缩略图。无批准时不要运行 YouTube 画面捕获。知乎、贴吧、Reddit、淘宝／天猫、京东及 Kickstarter 当前适配器不提供通用媒体文件下载；有公开视频 URL 时可尝试同样的网页截帧回退。
+YouTube Data API 返回视频元数据和评论，但没有视频文件下载方法；如果用户已取得适用于该处理方式的 YouTube 书面批准，本适配器会对普通网页播放器截帧 OCR，不下载完整视频或缩略图。无批准时不要运行 YouTube 画面捕获。知乎、贴吧、Reddit、淘宝／天猫和京东当前适配器不提供通用媒体文件下载；有公开视频 URL 时可尝试同样的网页截帧回退。
 
 ## 字段映射
 

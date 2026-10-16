@@ -25,7 +25,7 @@ from .core.storage import QualitySummary, ReviewStore
 from .core.utils import CollectionResult, load_json, validate_browser_profile_path
 
 MEDIACRAWLER_SOURCES = ('douyin', 'bilibili', 'weibo', 'zhihu', 'tieba')
-SOURCES = ('youtube', 'reddit', 'reddit_opencli', 'taobao', 'jd', 'amazon', 'kickstarter', 'xiaohongshu', *MEDIACRAWLER_SOURCES)
+SOURCES = ('youtube', 'reddit', 'reddit_opencli', 'taobao', 'jd', 'amazon', 'xiaohongshu', *MEDIACRAWLER_SOURCES)
 
 
 def dispatch(source, config, output, emit):

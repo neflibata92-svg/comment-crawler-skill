@@ -1,5 +1,5 @@
 import unittest
-from comment_crawler.collectors.browser import jd_record, taobao_record, kickstarter_record, validate_target, collect_jd, navigate
+from comment_crawler.collectors.browser import jd_record, taobao_record, validate_target, collect_jd, navigate
 from comment_crawler.core.utils import CollectionResult
 
 
@@ -17,12 +17,6 @@ class BrowserTests(unittest.TestCase):
         b = jd_record({'id': '123', 'content': 'new'}, a.url)
         self.assertEqual(a.record_key, b.record_key)
         self.assertNotEqual(a.content_hash, b.content_hash)
-
-    def test_kickstarter_parent_and_missing_id(self):
-        record = kickstarter_record({'id': 2, 'parent_id': 1, 'body': 'reply'}, 'https://www.kickstarter.com/projects/demo/camera/comments')
-        self.assertEqual(record.parent_id, '1')
-        with self.assertRaises(ValueError):
-            kickstarter_record({'body': 'missing id'}, record.url)
 
     def test_target_rejects_wrong_domain_and_scheme(self):
         for url in ['https://evil.example/?next=jd.com', 'file:///tmp/x', 'https://item.jd.com.evil.example/1.html']:
@@ -50,4 +44,4 @@ class BrowserTests(unittest.TestCase):
                     status = 200
                 return Response()
         with self.assertRaisesRegex(ValueError, '域名'):
-            navigate(Page(), 'https://api.kickstarter.com/v1/comments')
+            navigate(Page(), 'https://api.jd.com/v1/comments')

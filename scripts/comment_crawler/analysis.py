@@ -348,6 +348,7 @@ def _relation(source: str, content_type: str, parent_id: str, raw: dict[str, Any
         return "unknown"
     if source in {"youtube", "xiaohongshu", "xhs", "douyin", "bilibili", "weibo", "zhihu", "tieba"}:
         return "reply" if parent else "top_level"
+    # Preserve correct analysis of legacy task files after collection support removal.
     if source == "kickstarter":
         return "reply" if parent else "unknown"
     if parent:

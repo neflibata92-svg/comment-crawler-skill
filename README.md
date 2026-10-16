@@ -2,9 +2,9 @@
 
 **维护者：Neflibata**
 
-中文优先的多平台帖子与评论采集 Skill，也可作为独立 Python CLI 使用。覆盖 Amazon 美国站、淘宝／天猫、京东、Kickstarter、Reddit、YouTube、小红书，以及通过外置 MediaCrawler 接入的抖音、B站、微博、知乎和贴吧。关键词由使用者指定，没有内置品牌过滤；采集器不设置帖子或评论的本地总量截断。记录逐条写入 SQLite，可导出 CSV、JSONL，并报告覆盖限制与失败原因。
+中文优先的多平台帖子与评论采集 Skill，也可作为独立 Python CLI 使用。覆盖 Amazon 美国站、淘宝／天猫、京东、Reddit、YouTube、小红书，以及通过外置 MediaCrawler 接入的抖音、B站、微博、知乎和贴吧。关键词由使用者指定，没有内置品牌过滤；采集器不设置帖子或评论的本地总量截断。记录逐条写入 SQLite，可导出 CSV、JSONL，并报告覆盖限制与失败原因。
 
-**先选入口：** YouTube 使用 Data API key；Reddit 推荐 OAuth，也可使用已登录 Chrome 中的 OpenCLI；Amazon、淘宝／天猫、京东和小红书使用用户手动登录的专用浏览器档案；Kickstarter 从公开项目页进入；抖音、B站、微博、知乎和贴吧通过单独准备的 MediaCrawler checkout 运行。采集器不设帖子或评论总量上限，但平台分页、可见范围、权限、配额及个别上游入口能力仍会限制结果；分页结束不代表平台全量。
+**先选入口：** YouTube 使用 Data API key；Reddit 推荐 OAuth，也可使用已登录 Chrome 中的 OpenCLI；Amazon、淘宝／天猫、京东和小红书使用用户手动登录的专用浏览器档案；抖音、B站、微博、知乎和贴吧通过单独准备的 MediaCrawler checkout 运行。采集器不设帖子或评论总量上限，但平台分页、可见范围、权限、配额及个别上游入口能力仍会限制结果；分页结束不代表平台全量。
 
 **快速导航：** [安装](#安装) · [快速开始](#快速开始) · [MediaCrawler 五平台](#抖音b站微博知乎和贴吧) · [支持范围](#支持范围) · [输出与恢复](#输出与恢复) · [评论分析](#分析已有采集结果) · [开发验证](#开发验证)
 
@@ -141,11 +141,10 @@ API 也支持 `--config examples/config.json`；命令行参数覆盖同名配�
 | 淘宝／天猫 | 专用档案中由用户登录 | 采集商品评价；当前适配无用户回复树，追评单独放在元数据；6 轮无变化后标记 `stalled` |
 | 京东 | 专用档案中由用户登录 | 采集扁平商品评价；`afterUserReply` 等附加文本被合并进元数据，未建用户回复树；分页至空页并去重 |
 | Amazon 美国站 | 专用档案中由用户登录 | 商品标题与可见评价分页；评价图片在内存中 OCR，明确标示的商家回复保存为子记录；其他站点待验证 |
-| Kickstarter | 公开项目页 | 跟随下一页并保存返回的父 ID，未证明全部子回复覆盖；不下载视频文件 |
 | 小红书 | 专用档案中由用户自行登录；媒体下载需配置 MediaCrawler | 保存可见笔记字段、一级评论和楼中楼；连续六轮无新增后停止；可下载视频并在 OCR 后删除，缺少视频文件时网页截帧 OCR |
 | 抖音、B站、微博、知乎、贴吧 | 用户外置 MediaCrawler checkout；首次采集在可见浏览器中登录 | 帖子和评论均无本地总量截断；搜索结果需在帖子标题或正文命中搜索词。导入一级和二级评论。抖音、B站、微博请求媒体文件；视频帧和图片 OCR 完成后删除源媒体。重扫按 ID 去重，不保证精确游标续跑 |
 
-逐平台操作：[YouTube](references/youtube.md) · [Reddit](references/reddit.md) · [Amazon](references/amazon.md) · [淘宝／天猫](references/taobao.md) · [京东](references/jd.md) · [Kickstarter](references/kickstarter.md) · [小红书](references/xiaohongshu.md) · [MediaCrawler 五平台](references/mediacrawler.md)
+逐平台操作：[YouTube](references/youtube.md) · [Reddit](references/reddit.md) · [Amazon](references/amazon.md) · [淘宝／天猫](references/taobao.md) · [京东](references/jd.md) · [小红书](references/xiaohongshu.md) · [MediaCrawler 五平台](references/mediacrawler.md)
 
 人工导入、媒体文章、发布评论、私密社区和自动绕过验证不属于本包功能。程序只读评论，不自动登录或代用户完成验证。
 

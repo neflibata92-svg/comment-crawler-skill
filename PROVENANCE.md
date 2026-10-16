@@ -4,7 +4,7 @@
 
 | 发布代码 | 方法来源 | 发布版变化 |
 |---|---|---|
-| browser.py / taobao_dom.py | taobao_reviews.py、jd_reviews.py、kickstarter_reviews.py、对应登录脚本 | 参数化、普通 Playwright、统一记录、逐条 SQLite、明确停止原因 |
+| browser.py / taobao_dom.py | taobao_reviews.py、jd_reviews.py、kickstarter_reviews.py、对应登录脚本 | 参数化、普通 Playwright、统一记录、逐条 SQLite、明确停止原因；Kickstarter 采集已从当前版本移除 |
 | collectors/youtube.py | memomind_crawler/collectors/youtube.py | 去掉品牌过滤、完整分页、缺失回复补齐、旧视频更新、sink 写入 |
 | collectors/reddit.py | memomind_crawler/collectors/reddit.py | 搜索分页、更多评论展开、sink 写入 |
 | collectors/reddit_opencli.py | memomind_crawler/collectors/reddit_opencli.py | 独立 source、移除产品过滤、保留后端限制提示 |
